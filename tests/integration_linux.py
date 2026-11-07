@@ -51,6 +51,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def main():
     assert sys.platform.startswith("linux") and os.geteuid() == 0
     assert not m.STATE.exists(), "Use a disposable runner without an existing instance."
+    # EasyTier's connector binds a physical interface. A loopback peer URL is
+    # not a valid underlay target for that socket; use this runner's NIC IP.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect(("192.0.2.1", 9))  # select route; no datagram is sent
+        underlay_ip = probe.getsockname()[0]
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 18080), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     peer = tunnel = None
@@ -60,7 +65,7 @@ def main():
         command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key])
         cfg = {"ET_NETWORK_NAME": "ci-" + secrets.token_hex(8),
                "ET_NETWORK_SECRET": secrets.token_urlsafe(32),
-               "ET_PEERS": ["tcp://127.0.0.1:31110"],
+               "ET_PEERS": [f"tcp://{underlay_ip}:31110"],
                "SSH_PUBLIC_KEY": key.with_suffix(".pub").read_text().strip(),
                "ET_IPV4": "10.244.144.2/24"}
         payload = json.dumps(cfg)
@@ -68,7 +73,7 @@ def main():
             command([sys.executable, ROOT / "install.py", "--config-stdin"], data=payload)
             first = m.load_state()
             peer_cfg = m.validate({**cfg, "ET_IPV4": "10.244.144.1/24"})
-            text = m.make_toml(peer_cfg).replace("listeners = []", 'listeners = ["tcp://127.0.0.1:31110"]')
+            text = m.make_toml(peer_cfg).replace("listeners = []", f'listeners = ["tcp://{underlay_ip}:31110"]')
             text += '\n[[port_forward]]\nproto = "tcp"\nbind_addr = "127.0.0.1:18022"\ndst_addr = "10.244.144.2:2222"\n'
             # Deliberately test that direct HTTP access is denied by default.
             text += '\n[[port_forward]]\nproto = "tcp"\nbind_addr = "127.0.0.1:18081"\ndst_addr = "10.244.144.2:18080"\n'
