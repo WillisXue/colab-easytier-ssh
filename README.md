@@ -3,7 +3,7 @@
 [![Test](https://github.com/WillisXue/colab-easytier-ssh/actions/workflows/test.yml/badge.svg)](https://github.com/WillisXue/colab-easytier-ssh/actions/workflows/test.yml)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/WillisXue/colab-easytier-ssh/blob/main/colab.ipynb)
 
-在 Colab 网页中运行一个单元格，安装固定版本 EasyTier，以无 TUN 模式加入你的虚拟网络，并开启独立的 SSH 公钥登录服务。Windows 可以通过 Colab 的 EasyTier 虚拟 IP 直接访问应用 TCP/UDP 端口，也可以 SSH 登录。
+在 Colab 网页中运行一个单元格，安装固定版本 EasyTier，以无 TUN 模式加入你的虚拟网络，并配置现有 SSH 服务的 root 公钥登录。Windows 可以通过 Colab 的 EasyTier 虚拟 IP 直接访问应用 TCP/UDP 端口，也可以 SSH 登录。
 
 **公开仓库不保存你的网络名称、密钥、服务器地址或 SSH 私钥。**首次配置 Colab Secrets 后，每个新运行时重新运行安装单元格即可。启动运行时、授权 Secrets 仍可能需要点击操作。
 
@@ -42,9 +42,11 @@ Colab Secrets 使用 `google.colab.userdata.get()`，需要从 **Colab 网页界
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `ET_IPV4` | 空 | 留空由 EasyTier 自动分配；也可填写固定私网 IPv4 或 CIDR |
-| `SSH_PORT` | `2222` | 独立 SSH 端口，1024–65535 |
+| `SSH_PORT` | `2222` | 运行时现有 SSH 服务端口 |
 
-运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，为 root 配置专用公钥授权文件，启动独立 SSH 和 EasyTier 进程。
+运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，将公钥追加到现有 SSH 服务使用的 root 授权文件，并启动 EasyTier。重复执行时复用已有授权。
+
+对于锁定的 root 账户，安装器会在现有 sshd 配置中添加带项目标记的 `UsePAM yes` 设置，校验后重载原服务，使 root 可以通过公钥认证。
 
 显示本地服务就绪，只表示本地进程及端口正常；**发现同网对端也不等于已从 Windows 完成端到端连接**。最后需要从 Windows 访问实际服务或执行 SSH。若 Windows 尚未在线，安装仍会完成并显示等待对端。
 
@@ -89,16 +91,15 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 root@10.144.144.2
 
 安装单元格会显示安装器的执行结果。失败时显示具体步骤、命令名和退出码；系统依赖安装、SSH 配置检查的错误会附上诊断内容。安装成功后显示实际虚拟 IPv4 和 root SSH 连接命令。自动分配地址尚未就绪时，稍后运行 `status` 查看。
 
-- 再次运行安装单元格会更新配置、重启本项目进程，并保留当前运行时的 SSH 主机密钥。已安装版本会复用。
-- `stop` 只停止本项目进程，保留当前运行时的配置；重新启动仍需再次运行安装单元格或重新提供外部配置。
-- `uninstall` 停止进程，清理本项目安装目录、运行时配置和专用公钥授权文件。
+- 再次运行安装单元格会更新配置、重启 EasyTier，并复用当前运行时的 SSH 服务和主机密钥。
+- `stop` 停止 EasyTier，保留当前运行时的配置和 SSH 授权。
+- `uninstall` 清理本项目进程、安装目录、追加的公钥和认证设置；原有 SSH 服务继续运行。
 - SSH 使用 root 公钥登录，进入与 Colab Notebook 一致的 root 环境。
-- 不使用 systemd，不修改全局 sshd 配置，不停止系统原有的 SSH 或其他 EasyTier 实例。使用 `2222` 是为了减少端口冲突。
 - 安装目录 `/opt/colab-easytier-ssh`，配置及状态 `/run/colab-easytier-ssh`；不保存到 Google Drive。
 
 ## 外部参数与自动化
 
-安装器只依赖 Python 3.10+ 标准库，系统安装需要 Linux root、apt、访问 GitHub 的网络。`check` 可在 Windows 验证配置，不安装任何东西。
+安装器只依赖 Python 3.10+ 标准库，运行时需要 Linux root、现有 sshd 服务和访问 GitHub 的网络。`check` 可在 Windows 验证配置。
 
 机密入口任选其一：
 
@@ -154,7 +155,7 @@ python -m unittest discover -s tests -v
 python tools/check_notebook.py
 ```
 
-GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行固定地址及自动分配地址的 root SSH、多个 TCP 服务直连、UDP 服务直连、公钥拒绝、可选 HTTP SSH 端口转发和重复安装/清理测试，并检查系统账户和密码记录。Linux 集成测试必须在可丢弃的 root 环境执行，使用专用目录和临时测试密钥。
+GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 模拟 Colab 的现有 2222 SSH 服务，验证复用原 PID、公钥追加、重复安装、固定及自动地址的 root SSH、TCP/UDP 服务直连和卸载清理，并检查原有 SSH、公钥及系统账户记录。Linux 集成测试必须在可丢弃的 root 环境执行，使用专用目录和临时测试密钥。
 
 更新 `install.py` 后，先提交安装器，再执行 `python tools/build_notebook.py --commit <安装器所在完整提交SHA>`，将新的 Notebook 提交。不要把用户配置加入测试或版本历史。
 

@@ -147,14 +147,38 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("errno=13", output.getvalue())
         self.assertNotIn("PRIVATE-CONTEXT", output.getvalue())
 
-    def test_sshd_configuration_uses_root_public_key_authentication(self):
-        text = m.make_sshd(m.validate(config()), Path("/run/test/authorized_keys"))
-        self.assertIn("AllowUsers root\n", text)
-        self.assertIn("PermitRootLogin prohibit-password\n", text)
-        self.assertIn("AuthenticationMethods publickey\n", text)
-        self.assertIn("PasswordAuthentication no\n", text)
-        self.assertIn("KbdInteractiveAuthentication no\n", text)
-        self.assertIn("UsePAM yes\n", text)
+    def test_existing_sshd_launch_options_are_read_without_a_shell(self):
+        path, options = m.ssh_launch_options('sshd: /usr/sbin/sshd -D -f /etc/ssh/custom.conf -p2222 -o "UsePAM=yes" [listener]')
+        self.assertEqual(path, "/etc/ssh/custom.conf")
+        self.assertEqual(options, ["-p", "2222", "-o", "UsePAM=yes"])
+
+    def test_managed_ssh_block_cleanup_preserves_surrounding_settings(self):
+        existing = "Port 2222\nUsePAM no\n# Existing settings\n"
+        modified = m.SSH_BEGIN + "UsePAM yes\n" + m.SSH_END + existing
+        self.assertEqual(m.remove_ssh_block(modified), existing)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private file writes")
+    def test_adding_public_key_preserves_existing_keys_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "authorized_keys"
+            existing = "existing-key-data existing-comment\n"
+            path.write_text(existing)
+            key = "test-key-type public-key-test-data"
+            entry = m.add_authorized_key(path, key)
+            self.assertTrue(path.read_text().startswith(existing))
+            self.assertEqual(path.read_text().count(key), 1)
+            self.assertIsNone(m.add_authorized_key(path, key))
+            m.cleanup_ssh({"key_entries": [entry]})
+            self.assertEqual(path.read_text(), existing)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private file writes")
+    def test_preexisting_public_key_is_not_claimed_for_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "authorized_keys"
+            key = "test-key-type public-key-test-data"
+            path.write_text(key + " user-comment\n")
+            self.assertIsNone(m.add_authorized_key(path, key))
+            self.assertEqual(path.read_text(), key + " user-comment\n")
 
     def test_cli_handles_non_utf8_terminal(self):
         result = subprocess.run([sys.executable, str(ROOT / "install.py"), "check", "--config-stdin"],
@@ -193,6 +217,7 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(m, "STATE", Path(temp) / "absent"), \
                  patch.object(m, "is_owned", return_value=True), \
+                 patch.object(m, "ssh_reference_alive", return_value=True), \
                  patch.object(m, "port_open", return_value=True), \
                  patch.object(m, "routes", return_value=1), \
                  contextlib.redirect_stdout(output):

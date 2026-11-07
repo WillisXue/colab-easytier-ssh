@@ -71,11 +71,42 @@ def main():
     threading.Thread(target=second_server.serve_forever, daemon=True).start()
     udp_server = socketserver.UDPServer(("127.0.0.1", 18082), Echo)
     threading.Thread(target=udp_server.serve_forever, daemon=True).start()
-    peer = tunnel = None
+    peer = tunnel = existing_sshd = None
+    system_config = Path("/etc/ssh/sshd_config")
+    config_before = system_config.read_text()
+    config_mode = system_config.stat().st_mode & 0o777
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
         key = temp / "id_test"
         command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key])
+        sentinel = temp / "id_existing"
+        command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", sentinel])
+        existing_keys = temp / "authorized_keys"
+        original_keys = sentinel.with_suffix(".pub").read_text()
+        existing_keys.write_text(original_keys)
+        existing_keys.chmod(0o600)
+        Path("/run/sshd").mkdir(exist_ok=True)
+        command(["ssh-keygen", "-A"])
+        fixture_config = f"""Port 2222
+ListenAddress 127.0.0.1
+HostKey /etc/ssh/ssh_host_ed25519_key
+PidFile {temp}/existing_sshd.pid
+AuthorizedKeysFile {existing_keys}
+PermitRootLogin yes
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+Subsystem sftp internal-sftp
+"""
+        system_config.write_text(fixture_config)
+        command(["/usr/sbin/sshd", "-t"])
+        existing_sshd = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e"],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 10
+        while not m.port_open(2222) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert m.port_open(2222)
         cfg = {"ET_NETWORK_NAME": "ci-" + secrets.token_hex(8),
                # Intentionally short: verify existing short-key networks work.
                "ET_NETWORK_SECRET": secrets.token_hex(2),
@@ -86,6 +117,11 @@ def main():
         try:
             command([sys.executable, ROOT / "install.py", "--config-stdin"], data=payload)
             first = m.load_state()
+            assert first["ssh"]["pid"] == existing_sshd.pid
+            assert "sshd" not in first["processes"]
+            assert existing_keys.read_text().startswith(original_keys)
+            assert existing_keys.read_text().count(cfg["SSH_PUBLIC_KEY"].split()[1]) == 1
+            print("PASS: reuses the existing sshd PID and preserves preexisting keys")
             peer_cfg = m.validate({**cfg, "ET_IPV4": "10.244.144.1/24"})
             text = m.make_toml(peer_cfg).replace("listeners = []", f'listeners = ["tcp://{underlay_ip}:31110"]')
             text += '\n[[port_forward]]\nproto = "tcp"\nbind_addr = "127.0.0.1:18022"\ndst_addr = "10.244.144.2:2222"\n'
@@ -99,7 +135,7 @@ def main():
             peer = subprocess.Popen([str(m.ROOT / m.VERSION / "easytier-core"), "-c", str(peer_path),
                                      "-r", "127.0.0.1:31589"], stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, env=m.clean_env())
-            public = (m.STATE / "ssh_host_ed25519_key.pub").read_text().split()
+            public = Path("/etc/ssh/ssh_host_ed25519_key.pub").read_text().split()
             known = temp / "known_hosts"
             known.write_text("\n".join(f"[127.0.0.1]:{p} " + " ".join(public[:2]) for p in (18022, 2222)) + "\n")
             ssh = ["ssh", "-p", "18022", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
@@ -173,6 +209,8 @@ def main():
             command([sys.executable, ROOT / "install.py", "--config-stdin"], data=payload)
             assert not any(m.is_owned(r) for r in first["processes"].values())
             assert all(m.is_owned(r) for r in m.load_state()["processes"].values())
+            assert m.load_state()["ssh"]["pid"] == existing_sshd.pid
+            assert existing_keys.read_text().count(cfg["SSH_PUBLIC_KEY"].split()[1]) == 1
             command(ssh + ["root@127.0.0.1", "true"])
             with urllib.request.urlopen("http://127.0.0.1:18081", timeout=5) as response:
                 assert response.read() == b"COLAB_TUNNEL_OK"
@@ -212,9 +250,13 @@ def main():
                 assert response.read() == b"COLAB_TUNNEL_OK"
             print("PASS: automatic IPv4 discovery, saved status, root SSH and direct HTTP")
             command([sys.executable, ROOT / "install.py", "stop"])
-            assert not m.port_open(2222)
+            assert m.port_open(2222) and existing_sshd.poll() is None
             command([sys.executable, ROOT / "install.py", "uninstall"])
             assert not m.STATE.exists() and not m.ROOT.exists()
+            assert m.port_open(2222) and existing_sshd.poll() is None
+            assert existing_keys.read_text() == original_keys
+            assert system_config.read_text() == fixture_config
+            print("PASS: uninstall preserves existing sshd and restores only project additions")
             assert Path("/etc/passwd").read_bytes() == passwd_before, "System account records changed"
             assert Path("/etc/shadow").read_bytes() == shadow_before, "System password records changed"
             print("PASS: system accounts and passwords unchanged")
@@ -228,6 +270,11 @@ def main():
                 peer.wait(timeout=5)
             if m.STATE.exists():
                 command([sys.executable, ROOT / "install.py", "uninstall"])
+            if existing_sshd:
+                existing_sshd.terminate()
+                existing_sshd.wait(timeout=5)
+            system_config.write_text(config_before)
+            system_config.chmod(config_mode)
             server.shutdown()
             second_server.shutdown()
             udp_server.shutdown()

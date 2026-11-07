@@ -83,6 +83,7 @@ intro = '''# Colab EasyTier + SSH
 
 - `ET_PEERS` 填完整地址，例如 `tcp://你的服务器:11010`；多个地址用英文逗号分隔。
 - `SSH_PUBLIC_KEY` 填 Windows 的 OpenSSH **公钥**，私钥始终留在 Windows。
+- 安装器使用运行时现有的 2222 SSH 服务，将公钥加入 root 授权文件。
 - Windows EasyTier 使用相同网络名、密钥和连接节点。
 - `ET_IPV4` 留空由 EasyTier 自动分配地址，也可以手填固定地址。安装后会显示实际虚拟 IP。
 - 首次填写并授权后，运行下面一个单元格即可。初始化运行时、授权 Secrets 可能需要你操作。

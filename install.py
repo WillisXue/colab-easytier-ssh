@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Colab EasyTier + isolated OpenSSH installer. Python 3.10+, standard library only."""
+"""Colab EasyTier installer with existing root SSH. Python 3.10+, standard library only."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +12,7 @@ from pathlib import Path
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -36,6 +37,8 @@ RELEASES = {VERSION: {
 FIELDS = {"ET_NETWORK_NAME", "ET_NETWORK_SECRET", "ET_PEERS", "SSH_PUBLIC_KEY",
           "ET_IPV4", "SSH_PORT", "EASYTIER_VERSION"}
 STAGE = "配置校验"
+SSH_BEGIN = f"# BEGIN {APP}\n"
+SSH_END = f"# END {APP}\n"
 
 
 class SetupError(Exception):
@@ -313,30 +316,181 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def make_sshd(cfg, key_path):
-    return f"""Port {cfg['SSH_PORT']}
-ListenAddress 127.0.0.1
-HostKey {STATE}/ssh_host_ed25519_key
-PidFile {STATE}/sshd.pid
-AuthorizedKeysFile {key_path}
-AllowUsers root
-PermitRootLogin prohibit-password
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitEmptyPasswords no
-PubkeyAuthentication yes
-AuthenticationMethods publickey
-UsePAM yes
-StrictModes yes
-AllowTcpForwarding local
-GatewayPorts no
-AllowAgentForwarding no
-X11Forwarding no
-PermitTunnel no
-PermitUserEnvironment no
-Subsystem sftp internal-sftp
-LogLevel ERROR
-"""
+def ssh_reference_alive(ref):
+    if not isinstance(ref, dict):
+        return False
+    identity = proc_identity(ref.get("pid"))
+    try:
+        return bool(identity and identity[0] == ref.get("start")
+                    and Path(f"/proc/{ref['pid']}/exe").resolve().name == "sshd")
+    except OSError:
+        return False
+
+
+def ssh_launch_options(command):
+    """Read only sshd flags that affect its effective config; never run a shell."""
+    words = shlex.split(command.split(" [listener]")[0])
+    config, options = "/etc/ssh/sshd_config", []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word in {"-f", "-o", "-p"} and index + 1 < len(words):
+            value = words[index + 1]
+            index += 2
+            if word == "-f":
+                config = value
+            else:
+                options += [word, value]
+        elif word.startswith(("-f", "-o", "-p")) and len(word) > 2:
+            if word[:2] == "-f":
+                config = word[2:]
+            else:
+                options += [word[:2], word[2:]]
+            index += 1
+        else:
+            index += 1
+    return config, options
+
+
+def find_existing_sshd(port):
+    inodes = set()
+    for table in ("tcp", "tcp6"):
+        for line in Path(f"/proc/net/{table}").read_text().splitlines()[1:]:
+            row = line.split()
+            if row[3] == "0A" and int(row[1].rsplit(":", 1)[1], 16) == port:
+                inodes.add(row[9])
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            executable = (proc / "exe").resolve(strict=True)
+            if executable.name != "sshd":
+                continue
+            sockets = {os.readlink(fd) for fd in (proc / "fd").iterdir()}
+            if not any(f"socket:[{inode}]" in sockets for inode in inodes):
+                continue
+            identity = proc_identity(int(proc.name))
+            if not identity:
+                continue
+            config, options = ssh_launch_options(b" ".join(identity[1]).decode("utf-8", "replace"))
+            return {"pid": int(proc.name), "start": identity[0], "exe": str(executable),
+                    "config": str(Path(config).resolve()), "options": options, "port": port}
+        except (OSError, ValueError):
+            continue
+    raise SetupError("SSH_PORT 上没有找到现有 sshd 服务。")
+
+
+def ssh_config(ref, path=None):
+    result = run([ref["exe"], "-T", "-f", path or ref["config"], *ref["options"],
+                  "-C", f"user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport={ref['port']}"])
+    values = {}
+    for line in result.stdout.splitlines():
+        field, _, value = line.partition(" ")
+        values.setdefault(field, []).append(value)
+    return values
+
+
+def remove_ssh_block(text):
+    return re.sub(re.escape(SSH_BEGIN) + r".*?" + re.escape(SSH_END), "", text, flags=re.S)
+
+
+def reload_existing_sshd(ref):
+    if not ssh_reference_alive(ref):
+        raise SetupError("现有 sshd 实例已变化，请重新运行安装。")
+    os.kill(ref["pid"], signal.SIGHUP)
+    time.sleep(0.2)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if ssh_reference_alive(ref) and port_open(ref["port"]):
+            return
+        time.sleep(0.1)
+    raise SetupError("现有 sshd 重载后未就绪。")
+
+
+def enable_root_key_login(ref):
+    values = ssh_config(ref)
+    first = lambda name: values.get(name, [""])[0]
+    if first("permitrootlogin") not in {"yes", "prohibit-password", "without-password"} or first("pubkeyauthentication") != "yes":
+        raise SetupError("现有 sshd 需要先允许 root 公钥登录。")
+    if first("forcecommand") not in {"", "none"} or first("authenticationmethods") not in {"", "any", "publickey"}:
+        raise SetupError("现有 sshd 的认证策略不支持直接 root 公钥登录。")
+    account = run(["passwd", "-S", "root"]).stdout.split()
+    if len(account) > 1 and account[1] == "L" and first("usepam") != "yes":
+        if not Path("/etc/pam.d/sshd").is_file():
+            raise SetupError("现有 sshd 缺少 PAM 配置，无法启用锁定 root 的公钥登录。")
+        config = Path(ref["config"])
+        original = config.read_text()
+        modified = SSH_BEGIN + "UsePAM yes\n" + SSH_END + remove_ssh_block(original)
+        candidate = STATE / "sshd-check.conf"
+        private_write(candidate, modified)
+        run([ref["exe"], "-t", "-f", candidate, *ref["options"]])
+        if ssh_config(ref, candidate).get("usepam") != ["yes"]:
+            raise SetupError("现有 sshd 的启动参数阻止启用 PAM。")
+        mode = config.stat().st_mode & 0o777
+        private_write(config, modified, mode)
+        try:
+            reload_existing_sshd(ref)
+        except BaseException:
+            private_write(config, original, mode)
+            if ssh_reference_alive(ref):
+                os.kill(ref["pid"], signal.SIGHUP)
+            raise
+        values = ssh_config(ref)
+    return values
+
+
+def authorized_key_path(values):
+    import pwd
+    user = pwd.getpwnam("root")
+    paths = shlex.split(values.get("authorizedkeysfile", [""])[0])
+    for name in paths:
+        if name == "none":
+            continue
+        name = name.replace("%h", user.pw_dir).replace("%u", "root").replace("%U", "0").replace("%%", "%")
+        if "%" in name or name.startswith("~"):
+            raise SetupError("现有 AuthorizedKeysFile 路径含不支持的占位符。")
+        path = Path(name)
+        return path if path.is_absolute() else Path(user.pw_dir) / path
+    raise SetupError("现有 sshd 未配置公钥授权文件。")
+
+
+def add_authorized_key(path, key):
+    if path.is_symlink() or path.parent.is_symlink():
+        raise SetupError("公钥授权文件路径不能是符号链接。")
+    existed = path.exists()
+    text = path.read_text() if existed else ""
+    if any(line.split()[:2] == key.split() for line in text.splitlines()):
+        return None
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    line = key + " " + APP
+    private_write(path, text + ("\n" if text and not text.endswith("\n") else "") + line + "\n")
+    return {"path": str(path), "line": line, "created": not existed}
+
+
+def cleanup_ssh(state):
+    for entry in state.get("key_entries", []):
+        path = Path(entry["path"])
+        if not path.is_file() or path.is_symlink():
+            continue
+        lines = path.read_text().splitlines(keepends=True)
+        result = "".join(line for line in lines if line.rstrip("\r\n") != entry["line"])
+        if result != "".join(lines):
+            if not result and entry.get("created"):
+                path.unlink()
+            else:
+                private_write(path, result)
+    ref = state.get("ssh")
+    if ref:
+        config = Path(ref["config"])
+        original = config.read_text()
+        restored = remove_ssh_block(original)
+        if restored != original:
+            candidate = STATE / "sshd-check.conf"
+            private_write(candidate, restored)
+            run([ref["exe"], "-t", "-f", candidate, *ref["options"]])
+            private_write(config, restored, config.stat().st_mode & 0o777)
+            if ssh_reference_alive(ref):
+                reload_existing_sshd(ref)
 
 
 def routes(state):
@@ -365,7 +519,7 @@ def routes(state):
 def status(state=None):
     state = load_state() if state is None else state
     processes = state.get("processes", {})
-    ssh_alive = is_owned(processes.get("sshd"))
+    ssh_alive = ssh_reference_alive(state.get("ssh"))
     et_alive = is_owned(processes.get("easytier"))
     ssh_ready = bool(ssh_alive and port_open(state.get("ssh_port", 0)))
     count = routes(state) if et_alive else None
@@ -395,37 +549,35 @@ def start(cfg):
     STAGE = "1/5 安装依赖和下载 EasyTier"
     print("[1/5] 检查依赖与固定版本下载（不显示私密参数）")
     if not shutil.which("sshd"):
-        run(["apt-get", "update", "-qq"], timeout=300)
-        run(["apt-get", "install", "-y", "-qq", "--no-install-recommends", "openssh-server", "ca-certificates"], timeout=300)
+        raise SetupError("此运行时未安装 sshd；请使用带 SSH 服务的 Colab 运行时。")
     binaries = install_binaries(cfg["EASYTIER_VERSION"])
     STAGE = "2/5 配置 SSH 与公钥"
-    print("[2/5] 配置独立 SSH 实例与公钥")
+    print("[2/5] 配置现有 SSH 服务与公钥")
     key_path = STATE / f"authorized_keys.{APP}"
     private_write(key_path, cfg["SSH_PUBLIC_KEY"] + "\n")
     run(["ssh-keygen", "-l", "-f", key_path])
-    host_key = STATE / "ssh_host_ed25519_key"
-    if not host_key.exists():
-        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", host_key])
-    Path("/run/sshd").mkdir(mode=0o755, exist_ok=True)
-    ssh_config = STATE / "sshd_config.next"
-    private_write(ssh_config, make_sshd(cfg, key_path))
-    sshd = Path(shutil.which("sshd")).resolve()
-    run([sshd, "-t", "-f", ssh_config])
+    ref = find_existing_sshd(cfg["SSH_PORT"])
+    if is_owned(ref):
+        raise SetupError("SSH_PORT 对应旧版独立 SSH 实例，请选择运行时现有 SSH 服务端口。")
+    previous["ssh"] = ref
+    private_write(STATE / "state.json", json.dumps(previous))
+    values = enable_root_key_login(ref)
+    entry = add_authorized_key(authorized_key_path(values), cfg["SSH_PUBLIC_KEY"])
+    entries = previous.get("key_entries", [])
+    if entry:
+        entries.append(entry)
+    previous.update(ssh=ref, key_entries=entries)
+    private_write(STATE / "state.json", json.dumps(previous))
     STAGE = "3/5 启动服务"
-    print("[3/5] 写入私有配置并重启本项目服务")
+    print("[3/5] 写入私有配置并启动 EasyTier")
     previous = stop(previous)
-    if port_open(cfg["SSH_PORT"]):
-        raise SetupError("SSH_PORT 已被其他服务占用；请修改端口。")
-    os.replace(ssh_config, STATE / "sshd_config")
     private_write(STATE / "easytier.toml", make_toml(cfg))
     rpc_port = free_port()
-    state = {"authorized_key": str(key_path), "version": cfg["EASYTIER_VERSION"], "rpc_port": rpc_port,
+    state = {"ssh": ref, "key_entries": entries, "version": cfg["EASYTIER_VERSION"], "rpc_port": rpc_port,
              "ssh_port": cfg["SSH_PORT"],
              "ipv4": str(ipaddress.IPv4Interface(cfg["ET_IPV4"]).ip) if cfg["ET_IPV4"] else None,
              "processes": {}}
     try:
-        state["processes"]["sshd"] = launch([sshd, "-D", "-e", "-f", STATE / "sshd_config"])
-        private_write(STATE / "state.json", json.dumps(state))
         state["processes"]["easytier"] = launch([
             binaries / "easytier-core", "-c", STATE / "easytier.toml",
             "-r", f"127.0.0.1:{rpc_port}", "--rpc-portal-whitelist", "127.0.0.1/32"])
@@ -450,8 +602,13 @@ def start(cfg):
             time.sleep(1)
         STAGE = "5/5 读取网络状态和 SSH 指纹"
         print("[5/5] 状态与 SSH 主机公钥指纹")
-        fingerprint = run(["ssh-keygen", "-l", "-f", host_key.with_suffix(".pub")]).stdout.split()
-        print("主机指纹: " + fingerprint[1])
+        host_keys = values.get("hostkey", [])
+        host_keys.sort(key=lambda name: "ed25519" not in name)
+        if host_keys:
+            host_key = Path(host_keys[0])
+            public_key = Path(str(host_key) + ".pub")
+            fingerprint = run(["ssh-keygen", "-l", "-f", public_key if public_key.exists() else host_key]).stdout.split()
+            print("主机指纹: " + fingerprint[1])
         status(state)
         print("安装完成。运行时重建后重新运行安装单元格；原始服务输出不会保存。")
     except BaseException:
@@ -520,10 +677,7 @@ def main(argv=None):
         else:
             state = stop()
             if args.action == "uninstall":
-                # Only fixed project directories and the recorded project key.
-                key = state.get("authorized_key")
-                if key and Path(key).name == f"authorized_keys.{APP}":
-                    Path(key).unlink(missing_ok=True)
+                cleanup_ssh(state)
                 for path in (STATE, ROOT):
                     if path.exists():
                         shutil.rmtree(path)
