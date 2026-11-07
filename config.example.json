@@ -6,6 +6,5 @@
   "ET_IPV4": "10.144.144.2/24",
   "SSH_USER": "colabssh",
   "SSH_PORT": 2222,
-  "EASYTIER_VERSION": "v2.6.4",
-  "DIRECT_TCP_PORTS": []
+  "EASYTIER_VERSION": "v2.6.4"
 }

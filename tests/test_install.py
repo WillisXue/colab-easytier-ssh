@@ -50,7 +50,8 @@ class InstallerTests(unittest.TestCase):
         toml = tomllib.loads(m.make_toml(cfg))
         self.assertEqual(toml["network_identity"]["network_name"], cfg["ET_NETWORK_NAME"])
         self.assertEqual(toml["network_identity"]["network_secret"], cfg["ET_NETWORK_SECRET"])
-        self.assertEqual(toml["tcp_whitelist"], ["2222"])
+        self.assertNotIn("tcp_whitelist", toml)
+        self.assertNotIn("udp_whitelist", toml)
         self.assertTrue(toml["flags"]["no_tun"])
         self.assertNotIn("private-comment", cfg["SSH_PUBLIC_KEY"])
 
@@ -61,7 +62,7 @@ class InstallerTests(unittest.TestCase):
                  ("SSH_PUBLIC_KEY", 'command="bad" ssh-ed25519 aaaa'),
                  ("ET_IPV4", "127.0.0.1"), ("SSH_PORT", 22),
                  ("SSH_USER", "root"), ("ET_NETWORK_NAME", "injected\n[flags]"),
-                 ("EASYTIER_VERSION", "latest"), ("DIRECT_TCP_PORTS", ["not-port"])]
+                 ("EASYTIER_VERSION", "latest")]
         for field, value in cases:
             with self.subTest(field=field):
                 cfg = config()
@@ -92,7 +93,14 @@ class InstallerTests(unittest.TestCase):
             result = m.read_config(parser_args)
         self.assertEqual(result["SSH_PORT"], 3333)
         self.assertEqual(len(result["ET_PEERS"]), 2)
-        self.assertEqual(result["DIRECT_TCP_PORTS"], [8000])
+        self.assertNotIn("DIRECT_TCP_PORTS", result)
+
+    def test_legacy_port_list_does_not_restrict_direct_access(self):
+        baseline = m.make_toml(m.validate(config()))
+        for ports in ([], [8000], "8000,7860"):
+            cfg = config()
+            cfg["DIRECT_TCP_PORTS"] = ports
+            self.assertEqual(m.make_toml(m.validate(cfg)), baseline)
 
     def test_subprocess_failure_does_not_reveal_captured_output(self):
         proc = subprocess.CompletedProcess([], 1, "SECRET-SERVER", "SECRET-KEY")

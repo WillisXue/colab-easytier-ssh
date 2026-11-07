@@ -3,7 +3,7 @@
 [![Test](https://github.com/WillisXue/colab-easytier-ssh/actions/workflows/test.yml/badge.svg)](https://github.com/WillisXue/colab-easytier-ssh/actions/workflows/test.yml)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/WillisXue/colab-easytier-ssh/blob/main/colab.ipynb)
 
-在 Colab 网页中运行一个单元格，安装固定版本 EasyTier，以无 TUN 模式加入你的虚拟网络，并开启独立的 SSH 公钥登录服务。Windows 可以 SSH 登录，并通过本机 `localhost` 访问 Colab 应用端口。
+在 Colab 网页中运行一个单元格，安装固定版本 EasyTier，以无 TUN 模式加入你的虚拟网络，并开启独立的 SSH 公钥登录服务。Windows 可以通过 Colab 的 EasyTier 虚拟 IP 直接访问应用 TCP/UDP 端口，也可以 SSH 登录。
 
 **公开仓库不保存你的网络名称、密钥、服务器地址或 SSH 私钥。**首次配置 Colab Secrets 后，每个新运行时重新运行安装单元格即可。启动运行时、授权 Secrets 仍可能需要点击操作。
 
@@ -48,19 +48,33 @@ Colab Secrets 使用 `google.colab.userdata.get()`，需要从 **Colab 网页界
 
 运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，创建公钥登录用户，启动独立 SSH 和 EasyTier 进程。
 
-显示本地服务就绪，只表示本地进程及端口正常；**发现同网对端也不等于已从 Windows 完成端到端连接**。最后需要执行下一步的 SSH。若 Windows 尚未在线，安装仍会完成并显示等待对端。
+显示本地服务就绪，只表示本地进程及端口正常；**发现同网对端也不等于已从 Windows 完成端到端连接**。最后需要从 Windows 访问实际服务或执行 SSH。若 Windows 尚未在线，安装仍会完成并显示等待对端。
 
 ## 4. 从 Windows 连接
+
+组网成功后，直接通过 Colab 虚拟 IP 和应用端口访问，例如：
+
+```text
+http://10.144.144.2:8000
+http://10.144.144.2:7860
+```
+
+**不需要 `ssh -L`，也不需要逐个声明端口。**安装器不再设置应用 TCP/UDP 端口白名单。对应服务必须已在 Colab 启动；安装器不会替你安装或启动应用。无 TUN 模式将发往本节点虚拟 IP 的服务连接转到宿主机对应端口，因此也支持监听 Colab localhost 的服务。同网获准节点可以访问这些服务，实际连通仍受 EasyTier 网络策略、服务自身配置和防火墙影响。
+
+需要终端时，使用 SSH：
 
 ```powershell
 # 登录；首次连接时核对 Colab 打印的主机公钥指纹
 ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 colabssh@10.144.144.2
+```
 
-# 本机 8000 → Colab localhost:8000；多个端口重复添加 -L
+如果某个本地程序必须使用 Windows 的 localhost 地址，仍可选择 SSH 端口转发：
+
+```powershell
 ssh -N -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 -L 127.0.0.1:8000:127.0.0.1:8000 -L 127.0.0.1:7860:127.0.0.1:7860 colabssh@10.144.144.2
 ```
 
-保持转发命令运行，在 Windows 访问 `http://127.0.0.1:8000` 或 `http://127.0.0.1:7860`。对应服务必须已在 Colab 启动；安装器不会替你安装或启动应用。
+选择这种方式时，保持转发命令运行，在 Windows 访问 `http://127.0.0.1:8000` 或 `http://127.0.0.1:7860`。
 
 也可以下载并使用 `windows/connect.ps1`：
 
@@ -125,11 +139,10 @@ subprocess.run(
 | `SSH_USER` | string | 默认 `colabssh` |
 | `SSH_PORT` | integer | 默认 2222 |
 | `EASYTIER_VERSION` | string | 仅接受安装器内置校验清单版本，目前 v2.6.4 |
-| `DIRECT_TCP_PORTS` | integer[] | 额外允许从虚拟网直连的端口，默认空 |
 
-普通参数可以用 `--ipv4`、`--ssh-user`、`--ssh-port`、`--easytier-version`、重复的 `--direct-tcp-port` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
+普通参数可以用 `--ipv4`、`--ssh-user`、`--ssh-port`、`--easytier-version` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
 
-默认 EasyTier TCP 白名单只允许 SSH；UDP 白名单设为保留端口 0，以拒绝应用 UDP 入站。这不影响 EasyTier 自身的底层连接和打洞。若需要不经 SSH 直连应用，可显式设置 `DIRECT_TCP_PORTS`，例如 `[8000]`，但该服务会对同网获准节点可达。
+应用 TCP/UDP 端口不设白名单。旧配置字段 `DIRECT_TCP_PORTS` 和旧参数 `--direct-tcp-port` 仅为兼容而接受并忽略，不会恢复端口过滤。EasyTier 本机管理 RPC 的访问限制单独保留。
 
 ## 隐私边界与版本
 
@@ -148,7 +161,7 @@ python -m unittest discover -s tests -v
 python tools/check_notebook.py
 ```
 
-GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行真实双节点无 TUN SSH、公钥拒绝、HTTP 端口转发、默认端口白名单和重复安装/清理测试。Linux 集成测试必须在可丢弃的 root 环境执行，会创建测试用户并使用专用目录。
+GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行真实双节点无 TUN SSH、公钥拒绝、多个 TCP 服务直连、UDP 服务直连、可选 HTTP SSH 端口转发和重复安装/清理测试。直连测试只使用 EasyTier 的客户端适配，不建立 SSH 隧道。Linux 集成测试必须在可丢弃的 root 环境执行，会创建测试用户并使用专用目录。
 
 更新 `install.py` 后，先提交安装器，再执行 `python tools/build_notebook.py --commit <安装器所在完整提交SHA>`，将新的 Notebook 提交。不要把用户配置加入测试或版本历史。
 

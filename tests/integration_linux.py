@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import secrets
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class Echo(socketserver.BaseRequestHandler):
+    def handle(self):
+        data, sock = self.request
+        sock.sendto(data, self.client_address)
+
+
 def main():
     assert sys.platform.startswith("linux") and os.geteuid() == 0
     assert not m.STATE.exists(), "Use a disposable runner without an existing instance."
@@ -58,6 +65,10 @@ def main():
         underlay_ip = probe.getsockname()[0]
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 18080), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    second_server = http.server.ThreadingHTTPServer(("127.0.0.1", 18084), Handler)
+    threading.Thread(target=second_server.serve_forever, daemon=True).start()
+    udp_server = socketserver.UDPServer(("127.0.0.1", 18082), Echo)
+    threading.Thread(target=udp_server.serve_forever, daemon=True).start()
     peer = tunnel = None
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
@@ -76,8 +87,11 @@ def main():
             peer_cfg = m.validate({**cfg, "ET_IPV4": "10.244.144.1/24"})
             text = m.make_toml(peer_cfg).replace("listeners = []", f'listeners = ["tcp://{underlay_ip}:31110"]')
             text += '\n[[port_forward]]\nproto = "tcp"\nbind_addr = "127.0.0.1:18022"\ndst_addr = "10.244.144.2:2222"\n'
-            # Deliberately test that direct HTTP access is denied by default.
+            # Client-side adapters let a no-TUN test client reach overlay
+            # destinations. They are EasyTier forwards, with no SSH tunnel.
             text += '\n[[port_forward]]\nproto = "tcp"\nbind_addr = "127.0.0.1:18081"\ndst_addr = "10.244.144.2:18080"\n'
+            text += '\n[[port_forward]]\nproto = "tcp"\nbind_addr = "127.0.0.1:18085"\ndst_addr = "10.244.144.2:18084"\n'
+            text += '\n[[port_forward]]\nproto = "udp"\nbind_addr = "127.0.0.1:18083"\ndst_addr = "10.244.144.2:18082"\n'
             peer_path = temp / "peer.toml"
             peer_path.write_text(text)
             peer = subprocess.Popen([str(m.ROOT / m.VERSION / "easytier-core"), "-c", str(peer_path),
@@ -108,6 +122,23 @@ def main():
                     print("Synthetic peer diagnostic:", result.stdout, result.stderr, flush=True)
                 raise RuntimeError("no-TUN SSH did not become reachable")
             print("PASS: real no-TUN SSH public-key authentication")
+            for port in (18081, 18085):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=5) as response:
+                    assert response.read() == b"COLAB_TUNNEL_OK"
+            print("PASS: two direct TCP services over EasyTier without SSH forwarding")
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+                client.settimeout(1)
+                for _ in range(10):
+                    client.sendto(b"DIRECT_UDP_OK", ("127.0.0.1", 18083))
+                    try:
+                        data, _ = client.recvfrom(4096)
+                        assert data == b"DIRECT_UDP_OK"
+                        break
+                    except socket.timeout:
+                        pass
+                else:
+                    raise RuntimeError("direct UDP over EasyTier failed")
+            print("PASS: direct UDP service over EasyTier without SSH forwarding")
             # Confirm an untrusted key is refused.
             wrong = temp / "wrong"
             command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", wrong])
@@ -129,12 +160,6 @@ def main():
             else:
                 raise RuntimeError("HTTP over SSH -L failed")
             print("PASS: real HTTP over SSH local port forwarding")
-            try:
-                with urllib.request.urlopen("http://127.0.0.1:18081", timeout=3) as response:
-                    assert response.read() != b"COLAB_TUNNEL_OK", "direct TCP whitelist failed"
-            except OSError:
-                pass
-            print("PASS: direct non-SSH service denied by default")
             tunnel.terminate()
             tunnel.wait(timeout=5)
             tunnel = None
@@ -146,6 +171,8 @@ def main():
             assert not any(m.is_owned(r) for r in first["processes"].values())
             assert all(m.is_owned(r) for r in m.load_state()["processes"].values())
             command(ssh + ["colabssh@127.0.0.1", "true"])
+            with urllib.request.urlopen("http://127.0.0.1:18081", timeout=5) as response:
+                assert response.read() == b"COLAB_TUNNEL_OK"
             print("PASS: repeat-start replaces only owned processes; environment cannot override secrets")
             command([sys.executable, ROOT / "install.py", "stop"])
             assert not m.port_open(2222)
@@ -162,6 +189,11 @@ def main():
             if m.STATE.exists():
                 command([sys.executable, ROOT / "install.py", "uninstall"])
             server.shutdown()
+            second_server.shutdown()
+            udp_server.shutdown()
+            server.server_close()
+            second_server.server_close()
+            udp_server.server_close()
 
 
 if __name__ == "__main__":

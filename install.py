@@ -146,22 +146,17 @@ def validate(data):
     except (ValueError, UnicodeError):
         raise SetupError("SSH_PUBLIC_KEY 公钥数据无效。") from None
     cfg["SSH_PUBLIC_KEY"] = " ".join(parts[:2])  # discard identifying comments
-    direct = cfg.get("DIRECT_TCP_PORTS", [])
-    if isinstance(direct, str):
-        direct = [x.strip() for x in direct.split(",") if x.strip()]
-    if not isinstance(direct, list) or len(direct) > 32:
-        raise SetupError("DIRECT_TCP_PORTS 必须为最多 32 个端口的列表。")
-    cfg["DIRECT_TCP_PORTS"] = sorted({port_number(x, "DIRECT_TCP_PORTS") for x in direct})
+    # Backward compatibility with v0.1.0/v0.1.1 private config files. Service
+    # ports are unrestricted now; an old list must not restore filtering.
+    cfg.pop("DIRECT_TCP_PORTS", None)
     return cfg
 
 
 def make_toml(cfg):
     q = lambda x: json.dumps(x, ensure_ascii=True)
-    ports = sorted({cfg["SSH_PORT"], *cfg["DIRECT_TCP_PORTS"]})
     lines = [f'instance_name = "{APP}"', f'hostname = "{APP}"',
              f'ipv4 = {q(cfg["ET_IPV4"])}', "dhcp = false", "listeners = []",
-             "tcp_whitelist = " + q([str(x) for x in ports]),
-             'udp_whitelist = ["0"]', "", "[network_identity]",
+             "", "[network_identity]",
              "network_name = " + q(cfg["ET_NETWORK_NAME"]),
              "network_secret = " + q(cfg["ET_NETWORK_SECRET"])]
     for peer in cfg["ET_PEERS"]:
@@ -388,8 +383,9 @@ def status(state=None):
         print("指定 Windows 对端: " + ("已发现" if expected else "尚未发现"))
     if ssh_ready and et_alive:
         print(f"连接: ssh -p {state['ssh_port']} {state['managed_user']}@{state['ipv4']}")
-        print(f"端口转发示例: ssh -N -p {state['ssh_port']} -L 127.0.0.1:8000:127.0.0.1:8000 {state['managed_user']}@{state['ipv4']}")
-        print("以上为本地进程检查；请从 Windows 验证 SSH 和端口转发。")
+        print(f"服务直连示例: http://{state['ipv4']}:8000（需先启动对应服务）")
+        print("应用 TCP/UDP 端口未设置白名单，可通过 EasyTier 虚拟 IP 直接访问。")
+        print("以上为本地进程检查；请从 Windows 验证 SSH 和服务直连。")
     return ssh_ready and et_alive
 
 
@@ -499,7 +495,7 @@ def main(argv=None):
     parser.add_argument("--ssh-user")
     parser.add_argument("--ssh-port", type=int)
     parser.add_argument("--easytier-version")
-    parser.add_argument("--direct-tcp-port", type=int, action="append")
+    parser.add_argument("--direct-tcp-port", type=int, action="append", help=argparse.SUPPRESS)
     parser.add_argument("--expect-peer", help="Optional Windows virtual IPv4 for route discovery checks")
     args = parser.parse_args(argv)
     lock = None
