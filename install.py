@@ -503,6 +503,7 @@ def main(argv=None):
     parser.add_argument("--direct-tcp-port", type=int, action="append")
     parser.add_argument("--expect-peer", help="Optional Windows virtual IPv4 for route discovery checks")
     args = parser.parse_args(argv)
+    lock = None
     try:
         cfg = read_config(args) if args.action in {"start", "check"} else None
         if args.expect_peer:
@@ -518,6 +519,15 @@ def main(argv=None):
         for path in (STATE, ROOT):
             if path.is_symlink():
                 raise SetupError("项目目录不能是符号链接。")
+        import fcntl
+        STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+        STATE.chmod(0o700)
+        lock = (STATE / ".lock").open("a")
+        os.chmod(STATE / ".lock", 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SetupError("另一个本项目管理操作正在运行，请稍后重试。") from None
         if args.action == "start":
             start(cfg, args.expect_peer)
         elif args.action == "status":
@@ -546,6 +556,9 @@ def main(argv=None):
         # No traceback: exception text may contain peer URLs or configuration.
         print("错误: 操作失败；敏感上下文与原始输出已隐藏。", file=sys.stderr)
         return 1
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 if __name__ == "__main__":
