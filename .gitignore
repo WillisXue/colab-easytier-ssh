@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+config.json
+*.private.json
+*.toml
+*.log
+*.pid
+id_*
+ssh_host_*
+work/
+.pytest_cache/
+!config.example.json

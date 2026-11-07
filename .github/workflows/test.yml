@@ -1,0 +1,40 @@
+name: Test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+      - name: Validate notebook has no stored outputs
+        run: python tools/check_notebook.py
+      - name: Parse Windows helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd/windows/connect.ps1", [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count) { throw 'PowerShell parser errors' }
+  linux-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install SSH dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
+      - name: Real no-TUN SSH and HTTP tunnel test
+        run: sudo $(which python) tests/integration_linux.py
