@@ -11,6 +11,8 @@ for cell in notebook["cells"]:
         assert cell.get("outputs") == [] and cell.get("execution_count") is None
         ast.parse("".join(cell["source"]))
 source = "".join(notebook["cells"][1]["source"])
+assert 'ET_IPV4 = ""' in source
+assert 'EXPECT_WINDOWS_IP = ""' in source
 assert re.search(r'INSTALLER_COMMIT = "[a-f0-9]{40}"', source)
 assert re.search(r'INSTALLER_SHA256 = "[a-f0-9]{64}"', source)
 digest = hashlib.sha256((root / "install.py").read_bytes()).hexdigest()

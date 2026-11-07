@@ -12,9 +12,9 @@ assert re.fullmatch(r"[a-f0-9]{40}", args.commit)
 root = Path(__file__).resolve().parents[1]
 digest = hashlib.sha256((root / "install.py").read_bytes()).hexdigest()
 source = '''# @title 一键安装 EasyTier + SSH（先配置左侧 Secrets）
-ET_IPV4 = "10.144.144.2/24" # @param {type:"string"}
+ET_IPV4 = "" # @param {type:"string"}
 SSH_PORT = 2222 # @param {type:"integer"}
-EXPECT_WINDOWS_IP = "10.144.144.1" # @param {type:"string"}
+EXPECT_WINDOWS_IP = "" # @param {type:"string"}
 
 import hashlib
 import json
@@ -73,7 +73,8 @@ intro = '''# Colab EasyTier + SSH
 
 - `ET_PEERS` 填完整地址，例如 `tcp://你的服务器:11010`；多个地址用英文逗号分隔。
 - `SSH_PUBLIC_KEY` 填 Windows 的 OpenSSH **公钥**，私钥始终留在 Windows。
-- Windows EasyTier 使用相同网络名、密钥和连接节点，虚拟 IP 与下方配置同网段且不重复。
+- Windows EasyTier 使用相同网络名、密钥和连接节点。
+- `ET_IPV4` 留空由 EasyTier 自动分配地址，也可以手填固定地址。安装后会显示实际虚拟 IP。
 - 首次填写并授权后，运行下面一个单元格即可。初始化运行时、授权 Secrets 可能需要你操作。
 - Windows 通过 Colab 虚拟 IP 和应用端口访问 TCP/UDP 服务。运行时重建后重新运行此单元格。
 - [中文文档](https://github.com/WillisXue/colab-easytier-ssh) · [Colab 使用限制](https://research.google.com/colaboratory/faq.html)
@@ -90,12 +91,12 @@ manage = '''## 管理和 Windows 访问
 !python /content/colab-easytier-ssh-install.py uninstall
 ```
 
-先在 Colab 启动应用，Windows 随后通过虚拟 IP 和实际端口访问，例如 `http://10.144.144.2:8000` 或 `http://10.144.144.2:7860`。
+先在 Colab 启动应用，Windows 随后通过安装器显示的虚拟 IP 和应用端口访问，例如 `http://<虚拟IP>:8000`。
 
 需要终端时，在 Windows PowerShell 执行（按实际 IP 和端口修改）：
 
 ```powershell
-ssh -p 2222 root@10.144.144.2
+ssh -p 2222 root@<虚拟IP>
 ```
 
 首次 SSH 连接核对 Colab 打印的主机公钥指纹。

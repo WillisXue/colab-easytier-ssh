@@ -177,6 +177,40 @@ def main():
             with urllib.request.urlopen("http://127.0.0.1:18081", timeout=5) as response:
                 assert response.read() == b"COLAB_TUNNEL_OK"
             print("PASS: repeat-start replaces only owned processes; environment cannot override secrets")
+            # Switch the installed node to automatic address allocation while
+            # the other node stays online. Read its real address from RPC.
+            auto_cfg = {**cfg, "ET_IPV4": ""}
+            command([sys.executable, ROOT / "install.py", "--config-stdin"], data=json.dumps(auto_cfg))
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                auto_state = m.load_state()
+                m.routes(auto_state)
+                auto_ip = auto_state.get("ipv4")
+                if auto_ip:
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError("automatic virtual IPv4 was not assigned")
+            assert auto_ip != "10.244.144.1", "DHCP address conflicts with peer"
+            command([sys.executable, ROOT / "install.py", "status"])
+            assert m.load_state()["ipv4"] == auto_ip
+            peer.terminate()
+            peer.wait(timeout=5)
+            peer_path.write_text(text.replace("10.244.144.2:", f"{auto_ip}:"))
+            peer = subprocess.Popen([str(m.ROOT / m.VERSION / "easytier-core"), "-c", str(peer_path),
+                                     "-r", "127.0.0.1:31589"], stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, env=m.clean_env())
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                auto_login = command(ssh + ["root@127.0.0.1", "id -u"], ok=(0, 255))
+                if auto_login.returncode == 0 and auto_login.stdout.strip() == "0":
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError("root SSH to automatically assigned IPv4 failed")
+            with urllib.request.urlopen("http://127.0.0.1:18081", timeout=5) as response:
+                assert response.read() == b"COLAB_TUNNEL_OK"
+            print("PASS: automatic IPv4 discovery, saved status, root SSH and direct HTTP")
             command([sys.executable, ROOT / "install.py", "stop"])
             assert not m.port_open(2222)
             command([sys.executable, ROOT / "install.py", "uninstall"])

@@ -84,6 +84,26 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(m.SetupError):
             m.validate(cfg)
 
+    def test_blank_or_missing_ipv4_enables_automatic_allocation(self):
+        import tomllib
+        for value in (None, "", "   "):
+            cfg = config()
+            if value is not None:
+                cfg["ET_IPV4"] = value
+            validated = m.validate(cfg)
+            self.assertEqual(validated["ET_IPV4"], "")
+            result = tomllib.loads(m.make_toml(validated))
+            self.assertTrue(result["dhcp"])
+            self.assertNotIn("ipv4", result)
+
+    def test_explicit_ipv4_uses_static_allocation(self):
+        import tomllib
+        cfg = config()
+        cfg["ET_IPV4"] = "10.200.1.2/24"
+        result = tomllib.loads(m.make_toml(m.validate(cfg)))
+        self.assertFalse(result["dhcp"])
+        self.assertEqual(result["ipv4"], "10.200.1.2/24")
+
     def test_precedence_and_multi_peer_input(self):
         parser_args = type("Args", (), dict(config_stdin=True, config_file=None, ipv4="10.200.1.2/24",
                            ssh_port=3333, easytier_version=None))()
@@ -136,10 +156,26 @@ class InstallerTests(unittest.TestCase):
         payload = [{"ipv4": "10.144.144.2", "cost": "Local"},
                    {"ipv4": "10.144.144.1", "cost": "1", "hostname": "PRIVATE-HOST"}]
         proc = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+        state = {"version": m.VERSION, "rpc_port": 15888, "expect_peer": "10.144.144.1", "ipv4": None}
         with patch.object(m, "run", return_value=proc):
-            count, expected = m.routes({"version": m.VERSION, "rpc_port": 15888, "expect_peer": "10.144.144.1"})
+            count, expected = m.routes(state)
         self.assertEqual(count, 1)
         self.assertTrue(expected)
+        self.assertEqual(state["ipv4"], "10.144.144.2")
+
+    def test_status_waits_for_assigned_address(self):
+        state = {"processes": {}, "ssh_port": 2222, "ipv4": None}
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.object(m, "STATE", Path(temp) / "absent"), \
+                 patch.object(m, "is_owned", return_value=True), \
+                 patch.object(m, "port_open", return_value=True), \
+                 patch.object(m, "routes", return_value=(1, None)), \
+                 contextlib.redirect_stdout(output):
+                self.assertTrue(m.status(state))
+        self.assertIn("等待 EasyTier 分配", output.getvalue())
+        self.assertNotIn("root@", output.getvalue())
+        self.assertNotIn("http://", output.getvalue())
 
     @unittest.skipUnless(os.name == "posix", "POSIX file permissions")
     def test_private_write_permissions(self):

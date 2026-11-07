@@ -9,7 +9,7 @@
 
 ## 1. Windows 准备
 
-安装并配置 [EasyTier](https://github.com/EasyTier/EasyTier/releases/tag/v2.6.4)，使用你已有的网络名称、密钥和初始连接节点。建议两端先使用 v2.6.4。Windows 使用正常 TUN 模式，虚拟地址例如 `10.144.144.1/24`，Colab 默认 `10.144.144.2/24`。选择与你现有局域网、VPN 不冲突的网段。
+安装并配置 [EasyTier](https://github.com/EasyTier/EasyTier/releases/tag/v2.6.4)，使用你已有的网络名称、密钥和初始连接节点。建议两端先使用 v2.6.4。Windows 使用正常 TUN 模式。Colab 默认由 EasyTier 自动分配虚拟 IPv4，也可以在安装表单中填写固定地址。使用固定地址时，选择与你现有局域网、VPN 不冲突的网段。
 
 在 PowerShell 生成专用 SSH 密钥（已有密钥可以直接使用）：
 
@@ -41,9 +41,9 @@ Colab Secrets 使用 `google.colab.userdata.get()`，需要从 **Colab 网页界
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `ET_IPV4` | `10.144.144.2/24` | Colab 虚拟地址，不能与其他节点重复 |
+| `ET_IPV4` | 空 | 留空由 EasyTier 自动分配；也可填写固定私网 IPv4 或 CIDR |
 | `SSH_PORT` | `2222` | 独立 SSH 端口，1024–65535 |
-| `EXPECT_WINDOWS_IP` | `10.144.144.1` | 可选的对端路由检查；留空关闭 |
+| `EXPECT_WINDOWS_IP` | 空 | 可选的 Windows 对端路由检查 |
 
 运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，为 root 配置专用公钥授权文件，启动独立 SSH 和 EasyTier 进程。
 
@@ -51,7 +51,7 @@ Colab Secrets 使用 `google.colab.userdata.get()`，需要从 **Colab 网页界
 
 ## 4. 从 Windows 连接
 
-组网成功后，直接通过 Colab 虚拟 IP 和应用端口访问，例如：
+安装器会显示实际虚拟 IPv4。组网成功后，通过该地址和应用端口访问。下面以 `10.144.144.2` 为例，使用时替换成实际地址：
 
 ```text
 http://10.144.144.2:8000
@@ -126,11 +126,13 @@ subprocess.run(
 | `ET_NETWORK_SECRET` | string | 必填且非空；无最小长度限制 |
 | `ET_PEERS` | string 或 string[] | 必填；字符串用逗号/换行分隔 |
 | `SSH_PUBLIC_KEY` | string | 必填；单行 OpenSSH 公钥 |
-| `ET_IPV4` | string | 私网虚拟 IPv4 或 CIDR |
+| `ET_IPV4` | string | 默认空，由 EasyTier 自动分配；也可填写固定私网 IPv4 或 CIDR |
 | `SSH_PORT` | integer | 默认 2222 |
 | `EASYTIER_VERSION` | string | 仅接受安装器内置校验清单版本，目前 v2.6.4 |
 
 普通参数可以用 `--ipv4`、`--ssh-port`、`--easytier-version` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
+
+自动分配模式下，安装器通过 EasyTier 本机状态读取实际地址，并在 `status` 中更新连接命令。若安装结束时仍在分配，稍后运行 `status` 查看。
 
 应用 TCP/UDP 服务通过 EasyTier 虚拟 IP 和实际端口访问。
 
@@ -151,7 +153,7 @@ python -m unittest discover -s tests -v
 python tools/check_notebook.py
 ```
 
-GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行真实双节点无 TUN root SSH、公钥拒绝、多个 TCP 服务直连、UDP 服务直连、可选 HTTP SSH 端口转发和重复安装/清理测试，并检查系统账户和密码记录。Linux 集成测试必须在可丢弃的 root 环境执行，使用专用目录和临时测试密钥。
+GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行固定地址及自动分配地址的 root SSH、多个 TCP 服务直连、UDP 服务直连、公钥拒绝、可选 HTTP SSH 端口转发和重复安装/清理测试，并检查系统账户和密码记录。Linux 集成测试必须在可丢弃的 root 环境执行，使用专用目录和临时测试密钥。
 
 更新 `install.py` 后，先提交安装器，再执行 `python tools/build_notebook.py --commit <安装器所在完整提交SHA>`，将新的 Notebook 提交。不要把用户配置加入测试或版本历史。
 

@@ -120,13 +120,19 @@ def validate(data):
         except ValueError:
             raise SetupError("ET_PEERS 包含无效地址；需为带端口的 tcp/udp/ws/wss/quic URL。") from None
     cfg["ET_PEERS"] = peers
-    try:
-        address = ipaddress.IPv4Interface(cfg.get("ET_IPV4", "10.144.144.2/24"))
-        if not address.ip.is_private or address.ip.is_loopback or address.ip.is_link_local or address.ip.is_unspecified:
-            raise ValueError
-    except (ValueError, TypeError):
-        raise SetupError("ET_IPV4 必须为私网 IPv4 地址或 CIDR。") from None
-    cfg["ET_IPV4"] = str(address)
+    value = cfg.get("ET_IPV4", "")
+    if not isinstance(value, str):
+        raise SetupError("ET_IPV4 必须为字符串；留空自动分配地址。")
+    value = value.strip()
+    if value:
+        try:
+            address = ipaddress.IPv4Interface(value)
+            if not address.ip.is_private or address.ip.is_loopback or address.ip.is_link_local or address.ip.is_unspecified:
+                raise ValueError
+        except ValueError:
+            raise SetupError("ET_IPV4 请填写私网 IPv4 地址或 CIDR，或留空自动分配。") from None
+        value = str(address)
+    cfg["ET_IPV4"] = value
     cfg["SSH_PORT"] = port_number(cfg.get("SSH_PORT", 2222), "SSH_PORT")
     cfg["EASYTIER_VERSION"] = text_field(cfg, "EASYTIER_VERSION", VERSION)
     if cfg["EASYTIER_VERSION"] not in RELEASES:
@@ -148,9 +154,12 @@ def validate(data):
 
 def make_toml(cfg):
     q = lambda x: json.dumps(x, ensure_ascii=True)
-    lines = [f'instance_name = "{APP}"', f'hostname = "{APP}"',
-             f'ipv4 = {q(cfg["ET_IPV4"])}', "dhcp = false", "listeners = []",
-             "", "[network_identity]",
+    lines = [f'instance_name = "{APP}"', f'hostname = "{APP}"']
+    if cfg["ET_IPV4"]:
+        lines += [f'ipv4 = {q(cfg["ET_IPV4"])}', "dhcp = false"]
+    else:
+        lines += ["dhcp = true"]
+    lines += ["listeners = []", "", "[network_identity]",
              "network_name = " + q(cfg["ET_NETWORK_NAME"]),
              "network_secret = " + q(cfg["ET_NETWORK_SECRET"])]
     for peer in cfg["ET_PEERS"]:
@@ -326,6 +335,16 @@ def routes(state):
         parsed = json.loads(proc.stdout)
         # Upstream 2.6.x emits a JSON list of peer/route objects.
         pairs = parsed if isinstance(parsed, list) else parsed.get("peer_routes", [])
+        # The local row reports the address actually assigned by EasyTier,
+        # including DHCP changes. Never synthesize an address for auto mode.
+        for pair in pairs:
+            if pair.get("cost") == "Local":
+                try:
+                    local = ipaddress.IPv4Interface(pair.get("ipv4") or pair.get("cidr") or "")
+                    state["ipv4"] = None if local.ip.is_unspecified else str(local.ip)
+                except ValueError:
+                    state["ipv4"] = None
+                break
         pairs = [pair for pair in pairs if pair.get("cost") != "Local"]
         ips = set()
         for pair in pairs:
@@ -348,15 +367,21 @@ def status(state=None):
     et_alive = is_owned(processes.get("easytier"))
     ssh_ready = bool(ssh_alive and port_open(state.get("ssh_port", 0)))
     count, expected = routes(state) if et_alive else (None, None)
+    if et_alive and (STATE / "state.json").is_file():
+        private_write(STATE / "state.json", json.dumps(state))
     print("SSH: " + ("运行且端口可达" if ssh_ready else "未运行或未就绪"))
     print("EasyTier: " + ("运行" if et_alive else "未运行"))
     print("组网: " + (f"发现 {count} 个同网对端" if count else "等待同网对端 / RPC 未就绪"))
     if state.get("expect_peer"):
         print("指定 Windows 对端: " + ("已发现" if expected else "尚未发现"))
     if ssh_ready and et_alive:
-        print(f"连接: ssh -p {state['ssh_port']} root@{state['ipv4']}")
-        print(f"服务直连示例: http://{state['ipv4']}:8000（需先启动对应服务）")
-        print("通过 EasyTier 虚拟 IP 和应用实际监听端口访问 TCP/UDP 服务。")
+        if state.get("ipv4"):
+            print(f"虚拟 IPv4: {state['ipv4']}")
+            print(f"连接: ssh -p {state['ssh_port']} root@{state['ipv4']}")
+            print(f"服务直连示例: http://{state['ipv4']}:8000（需先启动对应服务）")
+            print("通过 EasyTier 虚拟 IP 和应用实际监听端口访问 TCP/UDP 服务。")
+        else:
+            print("虚拟 IPv4: 等待 EasyTier 分配；稍后运行 status 查看。")
         print("以上为本地进程检查；请从 Windows 验证 SSH 和服务直连。")
     return ssh_ready and et_alive
 
@@ -391,7 +416,8 @@ def start(cfg, expect_peer=None):
     private_write(STATE / "easytier.toml", make_toml(cfg))
     rpc_port = free_port()
     state = {"authorized_key": str(key_path), "version": cfg["EASYTIER_VERSION"], "rpc_port": rpc_port,
-             "ssh_port": cfg["SSH_PORT"], "ipv4": str(ipaddress.IPv4Interface(cfg["ET_IPV4"]).ip),
+             "ssh_port": cfg["SSH_PORT"],
+             "ipv4": str(ipaddress.IPv4Interface(cfg["ET_IPV4"]).ip) if cfg["ET_IPV4"] else None,
              "expect_peer": expect_peer, "processes": {}}
     try:
         state["processes"]["sshd"] = launch([sshd, "-D", "-e", "-f", STATE / "sshd_config"])
