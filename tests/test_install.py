@@ -156,11 +156,10 @@ class InstallerTests(unittest.TestCase):
         payload = [{"ipv4": "10.144.144.2", "cost": "Local"},
                    {"ipv4": "10.144.144.1", "cost": "1", "hostname": "PRIVATE-HOST"}]
         proc = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
-        state = {"version": m.VERSION, "rpc_port": 15888, "expect_peer": "10.144.144.1", "ipv4": None}
+        state = {"version": m.VERSION, "rpc_port": 15888, "ipv4": None}
         with patch.object(m, "run", return_value=proc):
-            count, expected = m.routes(state)
+            count = m.routes(state)
         self.assertEqual(count, 1)
-        self.assertTrue(expected)
         self.assertEqual(state["ipv4"], "10.144.144.2")
 
     def test_status_waits_for_assigned_address(self):
@@ -170,7 +169,7 @@ class InstallerTests(unittest.TestCase):
             with patch.object(m, "STATE", Path(temp) / "absent"), \
                  patch.object(m, "is_owned", return_value=True), \
                  patch.object(m, "port_open", return_value=True), \
-                 patch.object(m, "routes", return_value=(1, None)), \
+                 patch.object(m, "routes", return_value=1), \
                  contextlib.redirect_stdout(output):
                 self.assertTrue(m.status(state))
         self.assertIn("等待 EasyTier 分配", output.getvalue())

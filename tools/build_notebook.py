@@ -14,7 +14,6 @@ digest = hashlib.sha256((root / "install.py").read_bytes()).hexdigest()
 source = '''# @title 一键安装 EasyTier + SSH（先配置左侧 Secrets）
 ET_IPV4 = "" # @param {type:"string"}
 SSH_PORT = 2222 # @param {type:"integer"}
-EXPECT_WINDOWS_IP = "" # @param {type:"string"}
 
 import hashlib
 import json
@@ -51,8 +50,6 @@ def install_from_secrets():
         print("读取 Secrets 失败，请检查四个 Secrets 是否已填写并允许此 Notebook 访问。")
         return
     argv = [sys.executable, str(INSTALLER_PATH), "start", "--config-stdin"]
-    if EXPECT_WINDOWS_IP.strip():
-        argv += ["--expect-peer", EXPECT_WINDOWS_IP.strip()]
     try:
         # Credentials go over stdin, never in argv or notebook source/output.
         result = subprocess.run(argv, input=json.dumps(config), text=True,

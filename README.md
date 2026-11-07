@@ -43,7 +43,6 @@ Colab Secrets 使用 `google.colab.userdata.get()`，需要从 **Colab 网页界
 | --- | --- | --- |
 | `ET_IPV4` | 空 | 留空由 EasyTier 自动分配；也可填写固定私网 IPv4 或 CIDR |
 | `SSH_PORT` | `2222` | 独立 SSH 端口，1024–65535 |
-| `EXPECT_WINDOWS_IP` | 空 | 可选的 Windows 对端路由检查 |
 
 运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，为 root 配置专用公钥授权文件，启动独立 SSH 和 EasyTier 进程。
 
@@ -130,7 +129,7 @@ subprocess.run(
 | `SSH_PORT` | integer | 默认 2222 |
 | `EASYTIER_VERSION` | string | 仅接受安装器内置校验清单版本，目前 v2.6.4 |
 
-普通参数可以用 `--ipv4`、`--ssh-port`、`--easytier-version` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
+普通参数可以用 `--ipv4`、`--ssh-port`、`--easytier-version` 覆盖。
 
 自动分配模式下，安装器通过 EasyTier 本机状态读取实际地址，并在 `status` 中更新连接命令。若安装结束时仍在分配，稍后运行 `status` 查看。
 

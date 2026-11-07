@@ -346,18 +346,9 @@ def routes(state):
                     state["ipv4"] = None
                 break
         pairs = [pair for pair in pairs if pair.get("cost") != "Local"]
-        ips = set()
-        for pair in pairs:
-            route = pair.get("route") or {}
-            value = route.get("ipv4_addr") or pair.get("ipv4") or pair.get("cidr")
-            if isinstance(value, str):
-                try:
-                    ips.add(str(ipaddress.IPv4Interface(value).ip))
-                except ValueError:
-                    pass
-        return len(pairs), state.get("expect_peer") in ips if state.get("expect_peer") else None
+        return len(pairs)
     except (SetupError, ValueError, KeyError, TypeError, AttributeError):
-        return None, None
+        return None
 
 
 def status(state=None):
@@ -366,14 +357,12 @@ def status(state=None):
     ssh_alive = is_owned(processes.get("sshd"))
     et_alive = is_owned(processes.get("easytier"))
     ssh_ready = bool(ssh_alive and port_open(state.get("ssh_port", 0)))
-    count, expected = routes(state) if et_alive else (None, None)
+    count = routes(state) if et_alive else None
     if et_alive and (STATE / "state.json").is_file():
         private_write(STATE / "state.json", json.dumps(state))
     print("SSH: " + ("运行且端口可达" if ssh_ready else "未运行或未就绪"))
     print("EasyTier: " + ("运行" if et_alive else "未运行"))
     print("组网: " + (f"发现 {count} 个同网对端" if count else "等待同网对端 / RPC 未就绪"))
-    if state.get("expect_peer"):
-        print("指定 Windows 对端: " + ("已发现" if expected else "尚未发现"))
     if ssh_ready and et_alive:
         if state.get("ipv4"):
             print(f"虚拟 IPv4: {state['ipv4']}")
@@ -386,7 +375,7 @@ def status(state=None):
     return ssh_ready and et_alive
 
 
-def start(cfg, expect_peer=None):
+def start(cfg):
     # Config is validated before installation or stopping any existing process.
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.chmod(0o700)
@@ -418,7 +407,7 @@ def start(cfg, expect_peer=None):
     state = {"authorized_key": str(key_path), "version": cfg["EASYTIER_VERSION"], "rpc_port": rpc_port,
              "ssh_port": cfg["SSH_PORT"],
              "ipv4": str(ipaddress.IPv4Interface(cfg["ET_IPV4"]).ip) if cfg["ET_IPV4"] else None,
-             "expect_peer": expect_peer, "processes": {}}
+             "processes": {}}
     try:
         state["processes"]["sshd"] = launch([sshd, "-D", "-e", "-f", STATE / "sshd_config"])
         private_write(STATE / "state.json", json.dumps(state))
@@ -438,7 +427,7 @@ def start(cfg, expect_peer=None):
             raise SetupError("本地服务启动超时。")
         # Give routing a bounded opportunity to discover the other node.
         for _ in range(5):
-            count, _ = routes(state)
+            count = routes(state)
             if count:
                 break
             time.sleep(1)
@@ -485,16 +474,10 @@ def main(argv=None):
     parser.add_argument("--ipv4")
     parser.add_argument("--ssh-port", type=int)
     parser.add_argument("--easytier-version")
-    parser.add_argument("--expect-peer", help="Optional Windows virtual IPv4 for route discovery checks")
     args = parser.parse_args(argv)
     lock = None
     try:
         cfg = read_config(args) if args.action in {"start", "check"} else None
-        if args.expect_peer:
-            try:
-                args.expect_peer = str(ipaddress.IPv4Address(args.expect_peer))
-            except ValueError:
-                raise SetupError("--expect-peer 必须为 IPv4 地址。") from None
         if args.action == "check":
             print("配置校验通过（未安装、未连接、未输出参数）。")
             return 0
@@ -513,7 +496,7 @@ def main(argv=None):
         except BlockingIOError:
             raise SetupError("另一个本项目管理操作正在运行，请稍后重试。") from None
         if args.action == "start":
-            start(cfg, args.expect_peer)
+            start(cfg)
         elif args.action == "status":
             return 0 if status() else 1
         else:
