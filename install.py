@@ -366,7 +366,12 @@ def find_existing_sshd(port):
             executable = (proc / "exe").resolve(strict=True)
             if executable.name != "sshd":
                 continue
-            sockets = {os.readlink(fd) for fd in (proc / "fd").iterdir()}
+            sockets = set()
+            for fd in (proc / "fd").iterdir():
+                try:
+                    sockets.add(os.readlink(fd))
+                except OSError:
+                    continue
             if not any(f"socket:[{inode}]" in sockets for inode in inodes):
                 continue
             identity = proc_identity(int(proc.name))
