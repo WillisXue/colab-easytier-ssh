@@ -27,7 +27,7 @@ Get-Content "$env:USERPROFILE\.ssh\id_ed25519_colab.pub"
 | Secret 名称 | 填写内容 |
 | --- | --- |
 | `ET_NETWORK_NAME` | 与 Windows 一致的网络名称 |
-| `ET_NETWORK_SECRET` | 与 Windows 一致的网络密钥；至少 16 个字符 |
+| `ET_NETWORK_SECRET` | 与 Windows 一致的网络密钥；非空即可，无最小长度限制 |
 | `ET_PEERS` | 完整连接地址，如 `tcp://你的服务器:11010`；多个地址用英文逗号分隔 |
 | `SSH_PUBLIC_KEY` | Windows SSH 公钥的完整一行 |
 
@@ -118,7 +118,7 @@ subprocess.run(
 | 字段 | JSON 类型 | 说明 |
 | --- | --- | --- |
 | `ET_NETWORK_NAME` | string | 必填 |
-| `ET_NETWORK_SECRET` | string | 必填；至少 16 字符 |
+| `ET_NETWORK_SECRET` | string | 必填且非空；无最小长度限制 |
 | `ET_PEERS` | string 或 string[] | 必填；字符串用逗号/换行分隔 |
 | `SSH_PUBLIC_KEY` | string | 必填；单行 OpenSSH 公钥 |
 | `ET_IPV4` | string | 私网虚拟 IPv4 或 CIDR |

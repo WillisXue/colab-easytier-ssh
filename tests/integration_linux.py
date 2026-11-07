@@ -64,7 +64,8 @@ def main():
         key = temp / "id_test"
         command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key])
         cfg = {"ET_NETWORK_NAME": "ci-" + secrets.token_hex(8),
-               "ET_NETWORK_SECRET": secrets.token_urlsafe(32),
+               # Intentionally short: verify existing short-key networks work.
+               "ET_NETWORK_SECRET": secrets.token_hex(2),
                "ET_PEERS": [f"tcp://{underlay_ip}:31110"],
                "SSH_PUBLIC_KEY": key.with_suffix(".pub").read_text().strip(),
                "ET_IPV4": "10.244.144.2/24"}

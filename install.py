@@ -98,10 +98,9 @@ def validate(data):
     if not isinstance(data, dict) or set(data) - FIELDS:
         raise SetupError("配置必须为 JSON 对象，且只能包含文档中列出的字段。")
     cfg = dict(data)
-    for name in ("ET_NETWORK_NAME", "ET_NETWORK_SECRET"):
-        cfg[name] = text_field(cfg, name)
-    if len(cfg["ET_NETWORK_SECRET"]) < 16:
-        raise SetupError("ET_NETWORK_SECRET 至少需要 16 个字符。")
+    cfg["ET_NETWORK_NAME"] = text_field(cfg, "ET_NETWORK_NAME")
+    if not isinstance(cfg.get("ET_NETWORK_SECRET"), str) or not cfg["ET_NETWORK_SECRET"]:
+        raise SetupError("ET_NETWORK_SECRET 必须为非空字符串。")
     peers = cfg.get("ET_PEERS")
     if isinstance(peers, str):
         peers = [x.strip() for x in re.split(r"[,\n]", peers) if x.strip()]

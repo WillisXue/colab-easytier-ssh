@@ -55,7 +55,7 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("private-comment", cfg["SSH_PUBLIC_KEY"])
 
     def test_reject_invalid_config_without_echoing_values(self):
-        cases = [("ET_NETWORK_SECRET", "short"), ("ET_PEERS", ["https://secret-host.invalid:443"]),
+        cases = [("ET_NETWORK_SECRET", None), ("ET_PEERS", ["https://secret-host.invalid:443"]),
                  ("ET_PEERS", ["tcp://user:secret@host.invalid:11010"]),
                  ("SSH_PUBLIC_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----"),
                  ("SSH_PUBLIC_KEY", 'command="bad" ssh-ed25519 aaaa'),
@@ -69,6 +69,19 @@ class InstallerTests(unittest.TestCase):
                 with self.assertRaises(m.SetupError) as caught:
                     m.validate(cfg)
                 self.assertNotIn(str(value), str(caught.exception))
+
+    def test_network_secret_accepts_any_nonempty_string(self):
+        for secret in ("a", "short", " "):
+            with self.subTest(length=len(secret)):
+                cfg = config()
+                cfg["ET_NETWORK_SECRET"] = secret
+                self.assertEqual(m.validate(cfg)["ET_NETWORK_SECRET"], secret)
+
+    def test_empty_network_secret_is_rejected(self):
+        cfg = config()
+        cfg["ET_NETWORK_SECRET"] = ""
+        with self.assertRaises(m.SetupError):
+            m.validate(cfg)
 
     def test_precedence_and_multi_peer_input(self):
         parser_args = type("Args", (), dict(config_stdin=True, config_file=None, ipv4="10.200.1.2/24",
