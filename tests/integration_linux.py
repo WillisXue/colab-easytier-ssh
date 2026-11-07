@@ -77,7 +77,9 @@ def main():
     system_config = Path("/etc/ssh/sshd_config")
     config_before = system_config.read_text()
     config_mode = system_config.stat().st_mode & 0o777
-    with tempfile.TemporaryDirectory() as temp:
+    # AuthorizedKeysFile must live below trusted, non-writable parent paths;
+    # sshd StrictModes correctly rejects a key beneath the shared /tmp path.
+    with tempfile.TemporaryDirectory(prefix="colab-ssh-fixture-", dir="/run") as temp:
         temp = Path(temp)
         key = temp / "id_test"
         command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key])
