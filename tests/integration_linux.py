@@ -34,6 +34,8 @@ def command(argv, *, data=None, ok=(0,)):
         if any(str(x).endswith("install.py") for x in argv):
             # install.py's public output contract excludes config/raw logs.
             print(result.stdout, result.stderr, flush=True)
+        elif Path(str(argv[0])).name == "ssh":
+            print("Synthetic SSH client diagnostic:", result.stderr, flush=True)
         raise RuntimeError("integration subcommand failed: " + Path(str(argv[0])).name)
     return result
 
@@ -101,8 +103,10 @@ Subsystem sftp internal-sftp
 """
         system_config.write_text(fixture_config)
         command(["/usr/sbin/sshd", "-t"])
+        ssh_log_path = temp / "existing_sshd.log"
+        ssh_log = ssh_log_path.open("w")
         existing_sshd = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e"],
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                         stdout=subprocess.DEVNULL, stderr=ssh_log)
         deadline = time.monotonic() + 10
         while not m.port_open(2222) and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -262,6 +266,8 @@ Subsystem sftp internal-sftp
             print("PASS: system accounts and passwords unchanged")
             print("PASS: stop and uninstall clean up project resources")
         finally:
+            if sys.exc_info()[0] is not None:
+                print("Synthetic existing sshd diagnostic:", ssh_log_path.read_text()[-4000:], flush=True)
             if tunnel:
                 tunnel.terminate()
                 tunnel.wait(timeout=5)
@@ -273,6 +279,7 @@ Subsystem sftp internal-sftp
             if existing_sshd:
                 existing_sshd.terminate()
                 existing_sshd.wait(timeout=5)
+            ssh_log.close()
             system_config.write_text(config_before)
             system_config.chmod(config_mode)
             server.shutdown()
