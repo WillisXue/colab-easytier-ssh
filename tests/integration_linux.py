@@ -30,6 +30,9 @@ def command(argv, *, data=None, ok=(0,)):
     if result.returncode not in ok:
         # Test inputs are synthetic, but do not normalize raw diagnostics as a
         # practice for users. Only the command's tool name is reported.
+        if any(str(x).endswith("install.py") for x in argv):
+            # install.py's public output contract excludes config/raw logs.
+            print(result.stdout, result.stderr, flush=True)
         raise RuntimeError("integration subcommand failed: " + Path(str(argv[0])).name)
     return result
 
