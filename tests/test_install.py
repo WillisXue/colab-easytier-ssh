@@ -38,7 +38,7 @@ class InstallerTests(unittest.TestCase):
             if action == "start" and os.name != "nt":
                 continue
             proc = subprocess.run([sys.executable, str(ROOT / "install.py"), action, "--config-stdin"],
-                                  input=json.dumps(cfg), text=True, capture_output=True)
+                                  input=json.dumps(cfg), text=True, encoding="utf-8", capture_output=True)
             for secret in (cfg["ET_NETWORK_NAME"], cfg["ET_NETWORK_SECRET"], cfg["ET_PEERS"][0], "private-comment"):
                 self.assertNotIn(secret, proc.stdout + proc.stderr)
             if action == "check":
@@ -88,6 +88,13 @@ class InstallerTests(unittest.TestCase):
                 m.run(["fake"])
         self.assertNotIn("SECRET", str(caught.exception))
         self.assertFalse(any(k.startswith("ET_") for k in m.clean_env()))
+
+    def test_cli_handles_non_utf8_terminal(self):
+        result = subprocess.run([sys.executable, str(ROOT / "install.py"), "check", "--config-stdin"],
+                                input=json.dumps(config()), text=True, encoding="utf-8", capture_output=True,
+                                env={**os.environ, "PYTHONIOENCODING": "ascii"})
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_digest_failure_removes_download(self):
         with tempfile.TemporaryDirectory() as temp:

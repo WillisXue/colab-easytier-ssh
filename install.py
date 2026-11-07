@@ -562,4 +562,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # Windows terminals/runners may default to an ANSI code page. Keep the
+    # Chinese status messages usable over pipes as well as in Colab.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())
