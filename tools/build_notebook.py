@@ -107,6 +107,6 @@ notebook = {"cells": [
     {"cell_type": "markdown", "metadata": {}, "source": manage.splitlines(True)}],
     "metadata": {"colab": {"name": "colab-easytier-ssh.ipynb", "provenance": []},
                  "kernelspec": {"display_name": "Python 3", "name": "python3"},
-                 "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
+                 "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 4}
 (root / "colab.ipynb").write_text(json.dumps(notebook, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print("Notebook generated with pinned installer and empty outputs.")
