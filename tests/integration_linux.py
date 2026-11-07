@@ -79,10 +79,13 @@ def main():
                                     stderr=subprocess.DEVNULL, env=m.clean_env())
             public = (m.STATE / "ssh_host_ed25519_key.pub").read_text().split()
             known = temp / "known_hosts"
-            known.write_text("[127.0.0.1]:18022 " + " ".join(public[:2]) + "\n")
+            known.write_text("\n".join(f"[127.0.0.1]:{p} " + " ".join(public[:2]) for p in (18022, 2222)) + "\n")
             ssh = ["ssh", "-p", "18022", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
                    "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}",
                    "-o", "ConnectTimeout=3"]
+            local_ssh = ["2222" if x == "18022" else x for x in ssh]
+            command(local_ssh + ["colabssh@127.0.0.1", "true"])
+            print("PASS: isolated SSH login on the host loopback", flush=True)
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 attempt = command(ssh + ["colabssh@127.0.0.1", "printf SSH_OK"], ok=(0, 255))
@@ -90,6 +93,13 @@ def main():
                     break
                 time.sleep(1)
             else:
+                # These are disposable CI nodes and synthetic test keys. Never
+                # add this raw diagnostic path to the production installer.
+                print("Synthetic SSH transport diagnostic:", attempt.stderr, flush=True)
+                m.status()
+                for rpc in (first["rpc_port"], 31589):
+                    result = command([m.ROOT / m.VERSION / "easytier-cli", "-p", f"127.0.0.1:{rpc}", "-o", "json", "peer"], ok=(0, 1))
+                    print("Synthetic peer diagnostic:", result.stdout, result.stderr, flush=True)
                 raise RuntimeError("no-TUN SSH did not become reachable")
             print("PASS: real no-TUN SSH public-key authentication")
             # Confirm an untrusted key is refused.
