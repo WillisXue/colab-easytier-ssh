@@ -42,11 +42,10 @@ Colab Secrets 使用 `google.colab.userdata.get()`，需要从 **Colab 网页界
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `ET_IPV4` | `10.144.144.2/24` | Colab 虚拟地址，不能与其他节点重复 |
-| `SSH_USER` | `colabssh` | 本项目创建的普通用户 |
 | `SSH_PORT` | `2222` | 独立 SSH 端口，1024–65535 |
 | `EXPECT_WINDOWS_IP` | `10.144.144.1` | 可选的对端路由检查；留空关闭 |
 
-运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，创建公钥登录用户，启动独立 SSH 和 EasyTier 进程。
+运行该单元格。安装器下载固定版本的 EasyTier，校验 SHA-256，写入权限为 `600` 的运行时私有配置，为 root 配置专用公钥授权文件，启动独立 SSH 和 EasyTier 进程。
 
 显示本地服务就绪，只表示本地进程及端口正常；**发现同网对端也不等于已从 Windows 完成端到端连接**。最后需要从 Windows 访问实际服务或执行 SSH。若 Windows 尚未在线，安装仍会完成并显示等待对端。
 
@@ -65,7 +64,7 @@ http://10.144.144.2:7860
 
 ```powershell
 # 登录；首次连接时核对 Colab 打印的主机公钥指纹
-ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 colabssh@10.144.144.2
+ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 root@10.144.144.2
 ```
 
 
@@ -91,8 +90,8 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 colabssh@10.144.144.2
 
 - 再次运行安装单元格会更新配置、重启本项目进程，并保留当前运行时的 SSH 主机密钥。已安装版本会复用。
 - `stop` 只停止本项目进程，保留当前运行时的配置；重新启动仍需再次运行安装单元格或重新提供外部配置。
-- `uninstall` 停止进程，清理本项目安装目录、运行时配置和专用公钥授权文件；保留创建的 Linux 用户及其文件。
-- 默认通过 SSH 登录的用户是普通用户，**没有 sudo 权限**。Notebook 代码仍以 Colab 的 root 身份运行。
+- `uninstall` 停止进程，清理本项目安装目录、运行时配置和专用公钥授权文件。
+- SSH 使用 root 公钥登录，进入与 Colab Notebook 一致的 root 环境。
 - 不使用 systemd，不修改全局 sshd 配置，不停止系统原有的 SSH 或其他 EasyTier 实例。使用 `2222` 是为了减少端口冲突。
 - 安装目录 `/opt/colab-easytier-ssh`，配置及状态 `/run/colab-easytier-ssh`；不保存到 Google Drive。
 
@@ -128,11 +127,10 @@ subprocess.run(
 | `ET_PEERS` | string 或 string[] | 必填；字符串用逗号/换行分隔 |
 | `SSH_PUBLIC_KEY` | string | 必填；单行 OpenSSH 公钥 |
 | `ET_IPV4` | string | 私网虚拟 IPv4 或 CIDR |
-| `SSH_USER` | string | 默认 `colabssh` |
 | `SSH_PORT` | integer | 默认 2222 |
 | `EASYTIER_VERSION` | string | 仅接受安装器内置校验清单版本，目前 v2.6.4 |
 
-普通参数可以用 `--ipv4`、`--ssh-user`、`--ssh-port`、`--easytier-version` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
+普通参数可以用 `--ipv4`、`--ssh-port`、`--easytier-version` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
 
 应用 TCP/UDP 服务通过 EasyTier 虚拟 IP 和实际端口访问。
 
@@ -153,7 +151,7 @@ python -m unittest discover -s tests -v
 python tools/check_notebook.py
 ```
 
-GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行真实双节点无 TUN SSH、公钥拒绝、多个 TCP 服务直连、UDP 服务直连、可选 HTTP SSH 端口转发和重复安装/清理测试。直连测试只使用 EasyTier 的客户端适配，不建立 SSH 隧道。Linux 集成测试必须在可丢弃的 root 环境执行，会创建测试用户并使用专用目录。
+GitHub Actions 在 Windows/Linux 上运行配置校验、泄漏防护、下载校验和 Notebook 检查；独立 Ubuntu runner 还运行真实双节点无 TUN root SSH、公钥拒绝、多个 TCP 服务直连、UDP 服务直连、可选 HTTP SSH 端口转发和重复安装/清理测试，并检查系统账户和密码记录。Linux 集成测试必须在可丢弃的 root 环境执行，使用专用目录和临时测试密钥。
 
 更新 `install.py` 后，先提交安装器，再执行 `python tools/build_notebook.py --commit <安装器所在完整提交SHA>`，将新的 Notebook 提交。不要把用户配置加入测试或版本历史。
 

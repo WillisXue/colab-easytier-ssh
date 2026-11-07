@@ -61,7 +61,7 @@ class InstallerTests(unittest.TestCase):
                  ("SSH_PUBLIC_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----"),
                  ("SSH_PUBLIC_KEY", 'command="bad" ssh-ed25519 aaaa'),
                  ("ET_IPV4", "127.0.0.1"), ("SSH_PORT", 22),
-                 ("SSH_USER", "root"), ("ET_NETWORK_NAME", "injected\n[flags]"),
+                 ("ET_NETWORK_NAME", "injected\n[flags]"),
                  ("EASYTIER_VERSION", "latest")]
         for field, value in cases:
             with self.subTest(field=field):
@@ -86,7 +86,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_precedence_and_multi_peer_input(self):
         parser_args = type("Args", (), dict(config_stdin=True, config_file=None, ipv4="10.200.1.2/24",
-                           ssh_user=None, ssh_port=3333, easytier_version=None))()
+                           ssh_port=3333, easytier_version=None))()
         cfg = config()
         cfg["ET_PEERS"] = "tcp://one.invalid:11010,udp://two.invalid:11010"
         with patch.dict(os.environ, {"SSH_PORT": "4444"}), patch("sys.stdin", io.StringIO(json.dumps(cfg))):
@@ -101,6 +101,15 @@ class InstallerTests(unittest.TestCase):
                 m.run(["fake"])
         self.assertNotIn("SECRET", str(caught.exception))
         self.assertFalse(any(k.startswith("ET_") for k in m.clean_env()))
+
+    def test_sshd_configuration_uses_root_public_key_authentication(self):
+        text = m.make_sshd(m.validate(config()), Path("/run/test/authorized_keys"))
+        self.assertIn("AllowUsers root\n", text)
+        self.assertIn("PermitRootLogin prohibit-password\n", text)
+        self.assertIn("AuthenticationMethods publickey\n", text)
+        self.assertIn("PasswordAuthentication no\n", text)
+        self.assertIn("KbdInteractiveAuthentication no\n", text)
+        self.assertIn("UsePAM yes\n", text)
 
     def test_cli_handles_non_utf8_terminal(self):
         result = subprocess.run([sys.executable, str(ROOT / "install.py"), "check", "--config-stdin"],

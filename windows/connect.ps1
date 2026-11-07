@@ -3,8 +3,6 @@
 param(
     [Parameter(Mandatory = $true)]
     [System.Net.IPAddress]$Target,
-    [ValidatePattern('^[a-z][a-z0-9_-]{0,30}$')]
-    [string]$User = 'colabssh',
     [ValidateRange(1024, 65535)]
     [int]$Port = 2222,
     [string]$IdentityFile,
@@ -38,7 +36,7 @@ foreach ($mapping in $Forward) {
     $sshArgs += @('-L', "127.0.0.1:${localPort}:127.0.0.1:${remotePort}")
 }
 if ($Forward.Count -gt 0 -and -not $Shell) { $sshArgs += '-N' }
-$sshArgs += "${User}@${Target}"
+$sshArgs += "root@${Target}"
 Write-Host 'On first connection, compare the SSH fingerprint with the one shown in Colab.'
 & ssh.exe @sshArgs
 exit $LASTEXITCODE

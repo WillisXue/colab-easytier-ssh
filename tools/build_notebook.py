@@ -13,7 +13,6 @@ root = Path(__file__).resolve().parents[1]
 digest = hashlib.sha256((root / "install.py").read_bytes()).hexdigest()
 source = '''# @title 一键安装 EasyTier + SSH（先配置左侧 Secrets）
 ET_IPV4 = "10.144.144.2/24" # @param {type:"string"}
-SSH_USER = "colabssh" # @param {type:"string"}
 SSH_PORT = 2222 # @param {type:"integer"}
 EXPECT_WINDOWS_IP = "10.144.144.1" # @param {type:"string"}
 
@@ -44,7 +43,7 @@ def install_from_secrets():
     except Exception:
         print("下载失败，请检查 Colab 到 GitHub 的网络。")
         return
-    config = {"ET_IPV4": ET_IPV4, "SSH_USER": SSH_USER, "SSH_PORT": SSH_PORT}
+    config = {"ET_IPV4": ET_IPV4, "SSH_PORT": SSH_PORT}
     try:
         for name in ("ET_NETWORK_NAME", "ET_NETWORK_SECRET", "ET_PEERS", "SSH_PUBLIC_KEY"):
             config[name] = userdata.get(name)
@@ -93,10 +92,10 @@ manage = '''## 管理和 Windows 访问
 
 先在 Colab 启动应用，Windows 随后通过虚拟 IP 和实际端口访问，例如 `http://10.144.144.2:8000` 或 `http://10.144.144.2:7860`。
 
-需要终端时，在 Windows PowerShell 执行（按实际 IP、用户和端口修改）：
+需要终端时，在 Windows PowerShell 执行（按实际 IP 和端口修改）：
 
 ```powershell
-ssh -p 2222 colabssh@10.144.144.2
+ssh -p 2222 root@10.144.144.2
 ```
 
 首次 SSH 连接核对 Colab 打印的主机公钥指纹。

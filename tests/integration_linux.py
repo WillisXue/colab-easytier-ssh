@@ -58,6 +58,8 @@ class Echo(socketserver.BaseRequestHandler):
 def main():
     assert sys.platform.startswith("linux") and os.geteuid() == 0
     assert not m.STATE.exists(), "Use a disposable runner without an existing instance."
+    passwd_before = Path("/etc/passwd").read_bytes()
+    shadow_before = Path("/etc/shadow").read_bytes()
     # EasyTier's connector binds a physical interface. A loopback peer URL is
     # not a valid underlay target for that socket; use this runner's NIC IP.
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
@@ -104,12 +106,13 @@ def main():
                    "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}",
                    "-o", "ConnectTimeout=3"]
             local_ssh = ["2222" if x == "18022" else x for x in ssh]
-            command(local_ssh + ["colabssh@127.0.0.1", "true"])
-            print("PASS: isolated SSH login on the host loopback", flush=True)
+            local_login = command(local_ssh + ["root@127.0.0.1", "id -u"])
+            assert local_login.stdout.strip() == "0"
+            print("PASS: isolated root SSH login on the host loopback", flush=True)
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
-                attempt = command(ssh + ["colabssh@127.0.0.1", "printf SSH_OK"], ok=(0, 255))
-                if attempt.returncode == 0 and attempt.stdout == "SSH_OK":
+                attempt = command(ssh + ["root@127.0.0.1", "id -u"], ok=(0, 255))
+                if attempt.returncode == 0 and attempt.stdout.strip() == "0":
                     break
                 time.sleep(1)
             else:
@@ -121,7 +124,7 @@ def main():
                     result = command([m.ROOT / m.VERSION / "easytier-cli", "-p", f"127.0.0.1:{rpc}", "-o", "json", "peer"], ok=(0, 1))
                     print("Synthetic peer diagnostic:", result.stdout, result.stderr, flush=True)
                 raise RuntimeError("no-TUN SSH did not become reachable")
-            print("PASS: real no-TUN SSH public-key authentication")
+            print("PASS: real no-TUN root SSH public-key authentication (UID 0)")
             for port in (18081, 18085):
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=5) as response:
                     assert response.read() == b"COLAB_TUNNEL_OK"
@@ -143,11 +146,11 @@ def main():
             wrong = temp / "wrong"
             command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", wrong])
             wrong_ssh = [str(wrong) if x == str(key) else x for x in ssh]
-            denied = command(wrong_ssh + ["colabssh@127.0.0.1", "true"], ok=(255,))
+            denied = command(wrong_ssh + ["root@127.0.0.1", "true"], ok=(255,))
             assert denied.returncode == 255
             print("PASS: wrong SSH key rejected")
             tunnel = subprocess.Popen(ssh + ["-N", "-o", "ExitOnForwardFailure=yes", "-L",
-                                            "127.0.0.1:19080:127.0.0.1:18080", "colabssh@127.0.0.1"],
+                                            "127.0.0.1:19080:127.0.0.1:18080", "root@127.0.0.1"],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
@@ -170,7 +173,7 @@ def main():
             command([sys.executable, ROOT / "install.py", "--config-stdin"], data=payload)
             assert not any(m.is_owned(r) for r in first["processes"].values())
             assert all(m.is_owned(r) for r in m.load_state()["processes"].values())
-            command(ssh + ["colabssh@127.0.0.1", "true"])
+            command(ssh + ["root@127.0.0.1", "true"])
             with urllib.request.urlopen("http://127.0.0.1:18081", timeout=5) as response:
                 assert response.read() == b"COLAB_TUNNEL_OK"
             print("PASS: repeat-start replaces only owned processes; environment cannot override secrets")
@@ -178,6 +181,9 @@ def main():
             assert not m.port_open(2222)
             command([sys.executable, ROOT / "install.py", "uninstall"])
             assert not m.STATE.exists() and not m.ROOT.exists()
+            assert Path("/etc/passwd").read_bytes() == passwd_before, "System account records changed"
+            assert Path("/etc/shadow").read_bytes() == shadow_before, "System password records changed"
+            print("PASS: system accounts and passwords unchanged")
             print("PASS: stop and uninstall clean up project resources")
         finally:
             if tunnel:

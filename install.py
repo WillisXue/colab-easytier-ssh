@@ -34,7 +34,7 @@ RELEASES = {VERSION: {
     "aarch64": "f533ec25a7ea714e09f645615012200278058525795cc3bb690ff011aec1a70f",
 }}
 FIELDS = {"ET_NETWORK_NAME", "ET_NETWORK_SECRET", "ET_PEERS", "SSH_PUBLIC_KEY",
-          "ET_IPV4", "SSH_USER", "SSH_PORT", "EASYTIER_VERSION"}
+          "ET_IPV4", "SSH_PORT", "EASYTIER_VERSION"}
 
 
 class SetupError(Exception):
@@ -127,9 +127,6 @@ def validate(data):
     except (ValueError, TypeError):
         raise SetupError("ET_IPV4 必须为私网 IPv4 地址或 CIDR。") from None
     cfg["ET_IPV4"] = str(address)
-    cfg["SSH_USER"] = text_field(cfg, "SSH_USER", "colabssh")
-    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", cfg["SSH_USER"]) or cfg["SSH_USER"] in {"root", "nobody"}:
-        raise SetupError("SSH_USER 必须为普通 Linux 用户名。")
     cfg["SSH_PORT"] = port_number(cfg.get("SSH_PORT", 2222), "SSH_PORT")
     cfg["EASYTIER_VERSION"] = text_field(cfg, "EASYTIER_VERSION", VERSION)
     if cfg["EASYTIER_VERSION"] not in RELEASES:
@@ -296,42 +293,20 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def ensure_user(user, previous):
-    import pwd
-    try:
-        info = pwd.getpwnam(user)
-        if (user != previous.get("managed_user") and info.pw_gecos != APP) or info.pw_uid == 0:
-            raise SetupError("SSH_USER 已存在且不属于本项目；请选择其他用户名。")
-    except KeyError:
-        run(["useradd", "--create-home", "--shell", "/bin/bash", "--comment", APP, user])
-        # An unlocked account is needed with UsePAM=no. Random password is never
-        # displayed and password authentication is disabled by this sshd.
-        run(["chpasswd"], data=f"{user}:{secrets.token_urlsafe(48)}\n")
-        info = pwd.getpwnam(user)
-    home = Path(info.pw_dir)
-    key_dir = home / ".ssh"
-    if key_dir.is_symlink():
-        raise SetupError("SSH 用户目录含不安全的符号链接。")
-    key_dir.mkdir(mode=0o700, exist_ok=True)
-    key_dir.chmod(0o700)
-    os.chown(key_dir, info.pw_uid, info.pw_gid)
-    return info, key_dir / f"authorized_keys.{APP}"
-
-
 def make_sshd(cfg, key_path):
     return f"""Port {cfg['SSH_PORT']}
 ListenAddress 127.0.0.1
 HostKey {STATE}/ssh_host_ed25519_key
 PidFile {STATE}/sshd.pid
 AuthorizedKeysFile {key_path}
-AllowUsers {cfg['SSH_USER']}
-PermitRootLogin no
+AllowUsers root
+PermitRootLogin prohibit-password
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 PubkeyAuthentication yes
 AuthenticationMethods publickey
-UsePAM no
+UsePAM yes
 StrictModes yes
 AllowTcpForwarding local
 GatewayPorts no
@@ -379,7 +354,7 @@ def status(state=None):
     if state.get("expect_peer"):
         print("指定 Windows 对端: " + ("已发现" if expected else "尚未发现"))
     if ssh_ready and et_alive:
-        print(f"连接: ssh -p {state['ssh_port']} {state['managed_user']}@{state['ipv4']}")
+        print(f"连接: ssh -p {state['ssh_port']} root@{state['ipv4']}")
         print(f"服务直连示例: http://{state['ipv4']}:8000（需先启动对应服务）")
         print("通过 EasyTier 虚拟 IP 和应用实际监听端口访问 TCP/UDP 服务。")
         print("以上为本地进程检查；请从 Windows 验证 SSH 和服务直连。")
@@ -392,19 +367,13 @@ def start(cfg, expect_peer=None):
     STATE.chmod(0o700)
     previous = load_state()
     print("[1/5] 检查依赖与固定版本下载（不显示私密参数）")
-    if not shutil.which("sshd") or not shutil.which("useradd"):
+    if not shutil.which("sshd"):
         run(["apt-get", "update", "-qq"], timeout=300)
-        run(["apt-get", "install", "-y", "-qq", "--no-install-recommends", "openssh-server", "passwd", "ca-certificates"], timeout=300)
+        run(["apt-get", "install", "-y", "-qq", "--no-install-recommends", "openssh-server", "ca-certificates"], timeout=300)
     binaries = install_binaries(cfg["EASYTIER_VERSION"])
     print("[2/5] 配置独立 SSH 实例与公钥")
-    info, key_path = ensure_user(cfg["SSH_USER"], previous)
-    if previous.get("managed_user") and previous["managed_user"] != cfg["SSH_USER"]:
-        raise SetupError("更换 SSH_USER 前请先卸载原实例。")
-    # Record ownership immediately so a later failed setup is recoverable.
-    previous.update(managed_user=cfg["SSH_USER"], authorized_key=str(key_path))
-    private_write(STATE / "state.json", json.dumps(previous))
+    key_path = STATE / f"authorized_keys.{APP}"
     private_write(key_path, cfg["SSH_PUBLIC_KEY"] + "\n")
-    os.chown(key_path, info.pw_uid, info.pw_gid)
     run(["ssh-keygen", "-l", "-f", key_path])
     host_key = STATE / "ssh_host_ed25519_key"
     if not host_key.exists():
@@ -421,7 +390,7 @@ def start(cfg, expect_peer=None):
     os.replace(ssh_config, STATE / "sshd_config")
     private_write(STATE / "easytier.toml", make_toml(cfg))
     rpc_port = free_port()
-    state = {**previous, "version": cfg["EASYTIER_VERSION"], "rpc_port": rpc_port,
+    state = {"authorized_key": str(key_path), "version": cfg["EASYTIER_VERSION"], "rpc_port": rpc_port,
              "ssh_port": cfg["SSH_PORT"], "ipv4": str(ipaddress.IPv4Interface(cfg["ET_IPV4"]).ip),
              "expect_peer": expect_peer, "processes": {}}
     try:
@@ -474,7 +443,7 @@ def read_config(args):
         data.update(loaded)
     except (OSError, UnicodeError, ValueError):
         raise SetupError("私有配置必须为不超过 64 KiB 的有效 JSON 对象。") from None
-    for name, value in (("ET_IPV4", args.ipv4), ("SSH_USER", args.ssh_user),
+    for name, value in (("ET_IPV4", args.ipv4),
                         ("SSH_PORT", args.ssh_port), ("EASYTIER_VERSION", args.easytier_version)):
         if value is not None:
             data[name] = value
@@ -488,7 +457,6 @@ def main(argv=None):
     source.add_argument("--config-stdin", action="store_true")
     source.add_argument("--config-file", type=Path)
     parser.add_argument("--ipv4")
-    parser.add_argument("--ssh-user")
     parser.add_argument("--ssh-port", type=int)
     parser.add_argument("--easytier-version")
     parser.add_argument("--expect-peer", help="Optional Windows virtual IPv4 for route discovery checks")
@@ -532,7 +500,7 @@ def main(argv=None):
                 for path in (STATE, ROOT):
                     if path.exists():
                         shutil.rmtree(path)
-                print("已卸载本项目服务、密钥授权和配置；保留创建的 Linux 用户及其文件。")
+                print("已卸载本项目服务、密钥授权和配置。")
             else:
                 print("已停止本项目服务；配置仍保留在当前运行时。")
         return 0
