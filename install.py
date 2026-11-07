@@ -35,10 +35,11 @@ RELEASES = {VERSION: {
 }}
 FIELDS = {"ET_NETWORK_NAME", "ET_NETWORK_SECRET", "ET_PEERS", "SSH_PUBLIC_KEY",
           "ET_IPV4", "SSH_PORT", "EASYTIER_VERSION"}
+STAGE = "配置校验"
 
 
 class SetupError(Exception):
-    """Messages must contain field names or fixed text, never user values."""
+    """Messages must never include private network configuration or keys."""
 
 
 def private_write(path: Path, text: str, mode: int = 0o600):
@@ -62,14 +63,24 @@ def clean_env():
 
 
 def run(argv, *, data=None, timeout=60, ok=(0,)):
+    tool = Path(str(argv[0])).name
     try:
         proc = subprocess.run([str(x) for x in argv], input=data, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               env=clean_env(), timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        raise SetupError(f"子命令 {Path(str(argv[0])).name} 启动失败或超时；原始输出已隐藏。") from None
+    except subprocess.TimeoutExpired:
+        raise SetupError(f"{tool} 执行超时（{timeout} 秒）。") from None
+    except OSError as error:
+        raise SetupError(f"{tool} 启动失败（{type(error).__name__}，errno={error.errno}）。") from None
     if proc.returncode not in ok:
-        raise SetupError("子命令执行失败；原始输出已隐藏。")
+        message = f"{tool} 执行失败，退出码 {proc.returncode}。"
+        # These tools receive only fixed project file paths and non-secret
+        # options. Do not relay diagnostics from tools that see network config.
+        if tool in {"apt-get", "sshd", "ssh-keygen"}:
+            lines = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+            if lines:
+                message += "\n" + "\n".join(lines)[:2000]
+        raise SetupError(message)
     return proc
 
 
@@ -376,15 +387,18 @@ def status(state=None):
 
 
 def start(cfg):
+    global STAGE
     # Config is validated before installation or stopping any existing process.
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.chmod(0o700)
     previous = load_state()
+    STAGE = "1/5 安装依赖和下载 EasyTier"
     print("[1/5] 检查依赖与固定版本下载（不显示私密参数）")
     if not shutil.which("sshd"):
         run(["apt-get", "update", "-qq"], timeout=300)
         run(["apt-get", "install", "-y", "-qq", "--no-install-recommends", "openssh-server", "ca-certificates"], timeout=300)
     binaries = install_binaries(cfg["EASYTIER_VERSION"])
+    STAGE = "2/5 配置 SSH 与公钥"
     print("[2/5] 配置独立 SSH 实例与公钥")
     key_path = STATE / f"authorized_keys.{APP}"
     private_write(key_path, cfg["SSH_PUBLIC_KEY"] + "\n")
@@ -397,6 +411,7 @@ def start(cfg):
     private_write(ssh_config, make_sshd(cfg, key_path))
     sshd = Path(shutil.which("sshd")).resolve()
     run([sshd, "-t", "-f", ssh_config])
+    STAGE = "3/5 启动服务"
     print("[3/5] 写入私有配置并重启本项目服务")
     previous = stop(previous)
     if port_open(cfg["SSH_PORT"]):
@@ -415,11 +430,13 @@ def start(cfg):
             binaries / "easytier-core", "-c", STATE / "easytier.toml",
             "-r", f"127.0.0.1:{rpc_port}", "--rpc-portal-whitelist", "127.0.0.1/32"])
         private_write(STATE / "state.json", json.dumps(state))
+        STAGE = "4/5 检查服务就绪状态"
         print("[4/5] 等待本地服务就绪")
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            if not all(is_owned(r) for r in state["processes"].values()):
-                raise SetupError("服务提前退出；请检查版本、端口和运行时支持。原始输出已隐藏。")
+            failed = [name for name, record in state["processes"].items() if not is_owned(record)]
+            if failed:
+                raise SetupError("服务提前退出：" + ", ".join(failed) + "。")
             if port_open(cfg["SSH_PORT"]) and port_open(rpc_port):
                 break
             time.sleep(0.25)
@@ -431,6 +448,7 @@ def start(cfg):
             if count:
                 break
             time.sleep(1)
+        STAGE = "5/5 读取网络状态和 SSH 指纹"
         print("[5/5] 状态与 SSH 主机公钥指纹")
         fingerprint = run(["ssh-keygen", "-l", "-f", host_key.with_suffix(".pub")]).stdout.split()
         print("主机指纹: " + fingerprint[1])
@@ -514,14 +532,15 @@ def main(argv=None):
                 print("已停止本项目服务；配置仍保留在当前运行时。")
         return 0
     except SetupError as error:
-        print("错误: " + str(error), file=sys.stderr)
+        print(f"错误 [{STAGE}]: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("已中断。", file=sys.stderr)
         return 130
-    except Exception:
+    except Exception as error:
         # No traceback: exception text may contain peer URLs or configuration.
-        print("错误: 操作失败；敏感上下文与原始输出已隐藏。", file=sys.stderr)
+        code = f"，errno={error.errno}" if isinstance(error, OSError) else ""
+        print(f"错误 [{STAGE}]: {type(error).__name__}{code}。", file=sys.stderr)
         return 1
     finally:
         if lock is not None:

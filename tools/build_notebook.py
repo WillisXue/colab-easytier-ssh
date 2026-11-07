@@ -51,13 +51,26 @@ def install_from_secrets():
         return
     argv = [sys.executable, str(INSTALLER_PATH), "start", "--config-stdin"]
     try:
+        print("正在安装，完成后将显示执行结果。", flush=True)
         # Credentials go over stdin, never in argv or notebook source/output.
         result = subprocess.run(argv, input=json.dumps(config), text=True,
+                                encoding="utf-8", errors="replace", capture_output=True,
                                 env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C.UTF-8"})
+        # Colab displays Python output, while inherited child file descriptors
+        # can bypass the cell. Explicitly relay the installer's filtered logs.
+        output = (result.stdout or "").strip()
+        errors = (result.stderr or "").strip()
+        if output:
+            print(output)
+        if errors:
+            print(errors)
         if result.returncode:
-            print("安装未完成，请根据上方过滤后的错误信息检查配置。")
-    except Exception:
-        print("安装器未能运行；未显示私密配置。")
+            print(f"安装失败，退出码：{result.returncode}。")
+            if not output and not errors:
+                print("安装进程没有返回日志；可能在启动前退出，或被运行时终止。")
+    except Exception as error:
+        code = f"，errno={error.errno}" if isinstance(error, OSError) else ""
+        print(f"安装器启动失败（{type(error).__name__}{code}）。")
     finally:
         config.clear()
 

@@ -122,6 +122,31 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("SECRET", str(caught.exception))
         self.assertFalse(any(k.startswith("ET_") for k in m.clean_env()))
 
+    def test_system_tool_error_includes_tool_exit_code_and_diagnostic(self):
+        proc = subprocess.CompletedProcess([], 1, "", "Missing privilege separation directory: /run/sshd\n")
+        with patch.object(m.subprocess, "run", return_value=proc):
+            with self.assertRaises(m.SetupError) as caught:
+                m.run(["/usr/sbin/sshd", "-t", "-f", "/run/project/config"])
+        self.assertIn("sshd", str(caught.exception))
+        self.assertIn("1", str(caught.exception))
+        self.assertIn("Missing privilege separation directory", str(caught.exception))
+
+    def test_timeout_identifies_command_and_duration(self):
+        with patch.object(m.subprocess, "run", side_effect=subprocess.TimeoutExpired(["apt-get"], 300)):
+            with self.assertRaises(m.SetupError) as caught:
+                m.run(["apt-get", "update"], timeout=300)
+        self.assertIn("apt-get", str(caught.exception))
+        self.assertIn("300", str(caught.exception))
+
+    def test_unexpected_error_identifies_type_without_private_context(self):
+        output = io.StringIO()
+        with patch.object(m, "read_config", side_effect=PermissionError(13, "PRIVATE-CONTEXT")), \
+             contextlib.redirect_stderr(output):
+            self.assertEqual(m.main(["check"]), 1)
+        self.assertIn("PermissionError", output.getvalue())
+        self.assertIn("errno=13", output.getvalue())
+        self.assertNotIn("PRIVATE-CONTEXT", output.getvalue())
+
     def test_sshd_configuration_uses_root_public_key_authentication(self):
         text = m.make_sshd(m.validate(config()), Path("/run/test/authorized_keys"))
         self.assertIn("AllowUsers root\n", text)

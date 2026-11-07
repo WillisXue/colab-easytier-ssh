@@ -87,6 +87,8 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 root@10.144.144.2
 !python /content/colab-easytier-ssh-install.py uninstall
 ```
 
+安装单元格会显示安装器的执行结果。失败时显示具体步骤、命令名和退出码；系统依赖安装、SSH 配置检查的错误会附上诊断内容。安装成功后显示实际虚拟 IPv4 和 root SSH 连接命令。自动分配地址尚未就绪时，稍后运行 `status` 查看。
+
 - 再次运行安装单元格会更新配置、重启本项目进程，并保留当前运行时的 SSH 主机密钥。已安装版本会复用。
 - `stop` 只停止本项目进程，保留当前运行时的配置；重新启动仍需再次运行安装单元格或重新提供外部配置。
 - `uninstall` 停止进程，清理本项目安装目录、运行时配置和专用公钥授权文件。
@@ -139,7 +141,7 @@ subprocess.run(
 
 - Colab Secrets 由 Notebook 在内存中读取，通过标准输入传给安装器；真实参数不写入 GitHub。
 - EasyTier 启动命令只携带配置路径。原始 stdout/stderr 被丢弃，避免启动配置、异常中的密钥或服务器地址进入 Notebook；代价是没有原始 EasyTier 调试日志。
-- 错误只显示字段名或固定描述；SSH 公钥注释被移除。默认可显示虚拟 IP、登录用户名和主机公钥指纹，它们用于连接。
+- 错误包含字段名、失败步骤、命令名、退出码及系统工具诊断。SSH 公钥注释被移除。默认可显示虚拟 IP、登录用户名和主机公钥指纹，它们用于连接。
 - 运行时 root、被授权的 Notebook 代码仍可读取机密。公网中继可见连接元数据，服务器本身也能知道连接来源；这里保护的是仓库、命令行和输出中的机密，并非向运行平台或中继隐藏一切。
 - Notebook 下载的安装器固定到提交 SHA，并校验内置 SHA-256；EasyTier 固定为 v2.6.4，Linux x86_64/aarch64 发行包哈希写入安装器，不在运行时跟随 `latest`。
 - 安装器不提供保活、不绕过 Colab 限制。免费运行时的 SSH 限制、付费余额要求以及运行时寿命仍适用。见 [Colab FAQ](https://research.google.com/colaboratory/faq.html)。
