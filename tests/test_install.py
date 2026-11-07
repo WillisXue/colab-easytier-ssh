@@ -86,21 +86,13 @@ class InstallerTests(unittest.TestCase):
 
     def test_precedence_and_multi_peer_input(self):
         parser_args = type("Args", (), dict(config_stdin=True, config_file=None, ipv4="10.200.1.2/24",
-                           ssh_user=None, ssh_port=3333, easytier_version=None, direct_tcp_port=[8000]))()
+                           ssh_user=None, ssh_port=3333, easytier_version=None))()
         cfg = config()
         cfg["ET_PEERS"] = "tcp://one.invalid:11010,udp://two.invalid:11010"
         with patch.dict(os.environ, {"SSH_PORT": "4444"}), patch("sys.stdin", io.StringIO(json.dumps(cfg))):
             result = m.read_config(parser_args)
         self.assertEqual(result["SSH_PORT"], 3333)
         self.assertEqual(len(result["ET_PEERS"]), 2)
-        self.assertNotIn("DIRECT_TCP_PORTS", result)
-
-    def test_legacy_port_list_does_not_restrict_direct_access(self):
-        baseline = m.make_toml(m.validate(config()))
-        for ports in ([], [8000], "8000,7860"):
-            cfg = config()
-            cfg["DIRECT_TCP_PORTS"] = ports
-            self.assertEqual(m.make_toml(m.validate(cfg)), baseline)
 
     def test_subprocess_failure_does_not_reveal_captured_output(self):
         proc = subprocess.CompletedProcess([], 1, "SECRET-SERVER", "SECRET-KEY")

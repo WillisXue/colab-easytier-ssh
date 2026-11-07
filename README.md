@@ -59,7 +59,7 @@ http://10.144.144.2:8000
 http://10.144.144.2:7860
 ```
 
-**不需要 `ssh -L`，也不需要逐个声明端口。**安装器不再设置应用 TCP/UDP 端口白名单。对应服务必须已在 Colab 启动；安装器不会替你安装或启动应用。无 TUN 模式将发往本节点虚拟 IP 的服务连接转到宿主机对应端口，因此也支持监听 Colab localhost 的服务。同网获准节点可以访问这些服务，实际连通仍受 EasyTier 网络策略、服务自身配置和防火墙影响。
+先在 Colab 启动应用，再通过虚拟 IP 和应用实际监听端口访问。无 TUN 模式将发往本节点虚拟 IP 的服务连接转到宿主机对应端口，因此也支持监听 Colab localhost 的服务。实际连通受 EasyTier 网络策略、服务自身配置和防火墙影响。
 
 需要终端时，使用 SSH：
 
@@ -68,22 +68,14 @@ http://10.144.144.2:7860
 ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 colabssh@10.144.144.2
 ```
 
-如果某个本地程序必须使用 Windows 的 localhost 地址，仍可选择 SSH 端口转发：
-
-```powershell
-ssh -N -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 -L 127.0.0.1:8000:127.0.0.1:8000 -L 127.0.0.1:7860:127.0.0.1:7860 colabssh@10.144.144.2
-```
-
-选择这种方式时，保持转发命令运行，在 Windows 访问 `http://127.0.0.1:8000` 或 `http://127.0.0.1:7860`。
 
 也可以下载并使用 `windows/connect.ps1`：
 
 ```powershell
 .\windows\connect.ps1 -Target 10.144.144.2 -IdentityFile "$env:USERPROFILE\.ssh\id_ed25519_colab"
-.\windows\connect.ps1 -Target 10.144.144.2 -IdentityFile "$env:USERPROFILE\.ssh\id_ed25519_colab" -Forward '8000:8000','7860:7860'
 ```
 
-有 `-Forward` 时默认只转发，加 `-Shell` 可同时打开终端。助手使用独立的 `%LOCALAPPDATA%\colab-easytier-ssh\known_hosts`，首次连接仍需人工核对指纹。
+助手使用独立的 `%LOCALAPPDATA%\colab-easytier-ssh\known_hosts`，首次连接需核对指纹。
 
 新 Colab 运行时会生成新的 SSH 主机密钥。若 SSH 提示主机密钥变更，先核对新指纹，再用 `ssh-keygen -R '[10.144.144.2]:2222'` 清理对应的旧记录；使用助手时还需指定 `-f` 指向上述独立 known_hosts 文件。不要直接关闭主机校验。
 
@@ -142,7 +134,7 @@ subprocess.run(
 
 普通参数可以用 `--ipv4`、`--ssh-user`、`--ssh-port`、`--easytier-version` 覆盖。`--expect-peer` 可检查某个虚拟 IPv4 是否出现在对端路由中。
 
-应用 TCP/UDP 端口不设白名单。旧配置字段 `DIRECT_TCP_PORTS` 和旧参数 `--direct-tcp-port` 仅为兼容而接受并忽略，不会恢复端口过滤。EasyTier 本机管理 RPC 的访问限制单独保留。
+应用 TCP/UDP 服务通过 EasyTier 虚拟 IP 和实际端口访问。
 
 ## 隐私边界与版本
 

@@ -34,7 +34,7 @@ RELEASES = {VERSION: {
     "aarch64": "f533ec25a7ea714e09f645615012200278058525795cc3bb690ff011aec1a70f",
 }}
 FIELDS = {"ET_NETWORK_NAME", "ET_NETWORK_SECRET", "ET_PEERS", "SSH_PUBLIC_KEY",
-          "ET_IPV4", "SSH_USER", "SSH_PORT", "EASYTIER_VERSION", "DIRECT_TCP_PORTS"}
+          "ET_IPV4", "SSH_USER", "SSH_PORT", "EASYTIER_VERSION"}
 
 
 class SetupError(Exception):
@@ -67,7 +67,7 @@ def run(argv, *, data=None, timeout=60, ok=(0,)):
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               env=clean_env(), timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):
-        raise SetupError("子命令启动失败或超时；原始输出已隐藏。") from None
+        raise SetupError(f"子命令 {Path(str(argv[0])).name} 启动失败或超时；原始输出已隐藏。") from None
     if proc.returncode not in ok:
         raise SetupError("子命令执行失败；原始输出已隐藏。")
     return proc
@@ -146,9 +146,6 @@ def validate(data):
     except (ValueError, UnicodeError):
         raise SetupError("SSH_PUBLIC_KEY 公钥数据无效。") from None
     cfg["SSH_PUBLIC_KEY"] = " ".join(parts[:2])  # discard identifying comments
-    # Backward compatibility with v0.1.0/v0.1.1 private config files. Service
-    # ports are unrestricted now; an old list must not restore filtering.
-    cfg.pop("DIRECT_TCP_PORTS", None)
     return cfg
 
 
@@ -384,7 +381,7 @@ def status(state=None):
     if ssh_ready and et_alive:
         print(f"连接: ssh -p {state['ssh_port']} {state['managed_user']}@{state['ipv4']}")
         print(f"服务直连示例: http://{state['ipv4']}:8000（需先启动对应服务）")
-        print("应用 TCP/UDP 端口未设置白名单，可通过 EasyTier 虚拟 IP 直接访问。")
+        print("通过 EasyTier 虚拟 IP 和应用实际监听端口访问 TCP/UDP 服务。")
         print("以上为本地进程检查；请从 Windows 验证 SSH 和服务直连。")
     return ssh_ready and et_alive
 
@@ -478,8 +475,7 @@ def read_config(args):
     except (OSError, UnicodeError, ValueError):
         raise SetupError("私有配置必须为不超过 64 KiB 的有效 JSON 对象。") from None
     for name, value in (("ET_IPV4", args.ipv4), ("SSH_USER", args.ssh_user),
-                        ("SSH_PORT", args.ssh_port), ("EASYTIER_VERSION", args.easytier_version),
-                        ("DIRECT_TCP_PORTS", args.direct_tcp_port)):
+                        ("SSH_PORT", args.ssh_port), ("EASYTIER_VERSION", args.easytier_version)):
         if value is not None:
             data[name] = value
     return validate(data)
@@ -495,7 +491,6 @@ def main(argv=None):
     parser.add_argument("--ssh-user")
     parser.add_argument("--ssh-port", type=int)
     parser.add_argument("--easytier-version")
-    parser.add_argument("--direct-tcp-port", type=int, action="append", help=argparse.SUPPRESS)
     parser.add_argument("--expect-peer", help="Optional Windows virtual IPv4 for route discovery checks")
     args = parser.parse_args(argv)
     lock = None

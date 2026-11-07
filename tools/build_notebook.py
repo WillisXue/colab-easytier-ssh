@@ -76,7 +76,7 @@ intro = '''# Colab EasyTier + SSH
 - `SSH_PUBLIC_KEY` 填 Windows 的 OpenSSH **公钥**，私钥始终留在 Windows。
 - Windows EasyTier 使用相同网络名、密钥和连接节点，虚拟 IP 与下方配置同网段且不重复。
 - 首次填写并授权后，运行下面一个单元格即可。初始化运行时、授权 Secrets 可能需要你操作。
-- 应用 TCP/UDP 端口不设白名单，Windows 可通过 Colab 虚拟 IP 直接访问服务。运行时重建后重新运行此单元格。
+- Windows 通过 Colab 虚拟 IP 和应用端口访问 TCP/UDP 服务。运行时重建后重新运行此单元格。
 - [中文文档](https://github.com/WillisXue/colab-easytier-ssh) · [Colab 使用限制](https://research.google.com/colaboratory/faq.html)
 
 运行时会读取机密；不要向不信任的代码授权 Secrets。免费运行时的 SSH 限制仍适用。
@@ -91,7 +91,7 @@ manage = '''## 管理和 Windows 访问
 !python /content/colab-easytier-ssh-install.py uninstall
 ```
 
-组网后，Windows 可直接访问 `http://10.144.144.2:8000` 或 `http://10.144.144.2:7860`，不需要 SSH 端口转发；对应应用需先在 Colab 启动。
+先在 Colab 启动应用，Windows 随后通过虚拟 IP 和实际端口访问，例如 `http://10.144.144.2:8000` 或 `http://10.144.144.2:7860`。
 
 需要终端时，在 Windows PowerShell 执行（按实际 IP、用户和端口修改）：
 
@@ -99,7 +99,7 @@ manage = '''## 管理和 Windows 访问
 ssh -p 2222 colabssh@10.144.144.2
 ```
 
-首次 SSH 连接核对 Colab 打印的主机公钥指纹。服务使用实际监听端口，安装器不限制应用 TCP/UDP 端口。
+首次 SSH 连接核对 Colab 打印的主机公钥指纹。
 '''
 notebook = {"cells": [
     {"cell_type": "markdown", "metadata": {}, "source": intro.splitlines(True)},
