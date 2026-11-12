@@ -79,6 +79,12 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_colab" -p 2222 root@10.144.144.2
 
 新 Colab 运行时会生成新的 SSH 主机密钥。若 SSH 提示主机密钥变更，先核对新指纹，再用 `ssh-keygen -R '[10.144.144.2]:2222'` 清理对应的旧记录；使用助手时还需指定 `-f` 指向上述独立 known_hosts 文件。不要直接关闭主机校验。
 
+## 可选：前台监控
+
+需要长时间使用 SSH 时，先完成安装，然后在 Notebook 的「前台监控 EasyTier + SSH」单元格勾选 `ENABLE_MONITOR` 并运行。`MONITOR_MINUTES` 默认 120 分钟（可设为 1–1440）。监控约每分钟检查一次 EasyTier、组网及 SSH 的本地状态，仅在状态变化时显示结果。Windows 仍使用现有的 EasyTier 和 SSH 客户端。
+
+监控会占用 Notebook 内核，执行其他单元格前请先点击停止。手动停止或到期只结束监控，不关闭 EasyTier、SSH 或运行时。前台执行能否减少闲置断开取决于 [Colab 的运行时限制](https://research.google.com/colaboratory/faq.html#resource-limits)，包括订阅和剩余算力点；运行时被回收后，仍需重新安装。
+
 ## 管理当前运行时
 
 安装后，在 Colab 新单元格中执行以下任一命令：

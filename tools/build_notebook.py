@@ -86,12 +86,80 @@ intro = '''# Colab EasyTier + SSH
 - 安装器使用运行时现有的 2222 SSH 服务，将公钥加入 root 授权文件。
 - Windows EasyTier 使用相同网络名、密钥和连接节点。
 - `ET_IPV4` 留空由 EasyTier 自动分配地址，也可以手填固定地址。安装后会显示实际虚拟 IP。
-- 首次填写并授权后，运行下面一个单元格即可。初始化运行时、授权 Secrets 可能需要你操作。
+- 首次填写并授权后，运行下方安装单元格即可。初始化运行时、授权 Secrets 可能需要你操作。
 - Windows 通过 Colab 虚拟 IP 和应用端口访问 TCP/UDP 服务。运行时重建后重新运行此单元格。
 - [中文文档](https://github.com/WillisXue/colab-easytier-ssh) · [Colab 使用限制](https://research.google.com/colaboratory/faq.html)
 
 运行时会读取机密；不要向不信任的代码授权 Secrets。免费运行时的 SSH 限制仍适用。
 '''
+monitor_intro = '''## 可选：前台监控 EasyTier + SSH
+
+安装成功后，需要长时间用 SSH 时，勾选 `ENABLE_MONITOR`，按需修改 `MONITOR_MINUTES`，再运行下方单元格。监控默认持续 120 分钟，约每分钟检查 EasyTier、组网和 SSH 的本地状态，仅在状态变化时输出。发现同网对端不代表 Windows 一定可以连通。
+
+监控会占用 Notebook 内核；运行其他单元格前，先点击停止按钮。停止或到期只结束监控，不停止 EasyTier、SSH 或 Colab 运行时。Windows 仍按原方式连接。前台执行能否减少闲置断开取决于 Colab 的运行时策略和算力余额，不能保证持续在线。
+'''
+
+monitor = '''# @title 可选：前台监控 EasyTier + SSH（先完成安装）
+ENABLE_MONITOR = False # @param {type:"boolean"}
+MONITOR_MINUTES = 120 # @param {type:"integer"}
+
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+
+def monitor_services(minutes):
+    if type(minutes) is not int or not 1 <= minutes <= 1440:
+        print("MONITOR_MINUTES 必须是 1 至 1440 的整数。")
+        return
+    installer = Path("/content/colab-easytier-ssh-install.py")
+    if not installer.is_file():
+        print("当前运行时找不到安装器，请先运行上方安装单元格。")
+        return
+
+    deadline = time.monotonic() + minutes * 60
+    previous = None
+    print(f"开始前台监控（{minutes} 分钟）。仅在状态变化时输出；点击停止按钮可结束。", flush=True)
+    try:
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(installer), "status"], stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=min(15, remaining),
+                    env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C.UTF-8"},
+                )
+                snapshot = (result.returncode, result.stdout.strip(), result.stderr.strip())
+            except subprocess.TimeoutExpired:
+                snapshot = (None, "", "状态检查超时。")
+            except OSError as error:
+                snapshot = (None, "", f"无法启动状态检查（{type(error).__name__}）。")
+
+            if snapshot != previous:
+                exit_code, output, error = snapshot
+                for message in (output, error):
+                    if message:
+                        print(message, flush=True)
+                if exit_code:
+                    print(f"状态检查退出码：{exit_code}。", flush=True)
+                previous = snapshot
+
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(60, remaining))
+    except KeyboardInterrupt:
+        print("已手动停止监控。", flush=True)
+    else:
+        print("监控已到期。", flush=True)
+
+
+if ENABLE_MONITOR:
+    monitor_services(MONITOR_MINUTES)
+else:
+    print("监控未启用。勾选 ENABLE_MONITOR 后重新运行本单元格。")
+'''
+
 manage = '''## 管理和 Windows 访问
 
 安装后可在新的代码单元格执行（命令不包含机密）：
@@ -116,9 +184,12 @@ notebook = {"cells": [
     {"cell_type": "markdown", "metadata": {}, "source": intro.splitlines(True)},
     {"cell_type": "code", "metadata": {"cellView": "form"}, "execution_count": None,
      "outputs": [], "source": source.splitlines(True)},
+    {"cell_type": "markdown", "metadata": {}, "source": monitor_intro.splitlines(True)},
+    {"cell_type": "code", "metadata": {"cellView": "form"}, "execution_count": None,
+     "outputs": [], "source": monitor.splitlines(True)},
     {"cell_type": "markdown", "metadata": {}, "source": manage.splitlines(True)}],
     "metadata": {"colab": {"name": "colab-easytier-ssh.ipynb", "provenance": []},
                  "kernelspec": {"display_name": "Python 3", "name": "python3"},
                  "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 4}
-(root / "colab.ipynb").write_text(json.dumps(notebook, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+(root / "colab.ipynb").write_text(json.dumps(notebook, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 print("Notebook generated with pinned installer and empty outputs.")
